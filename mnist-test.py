@@ -8,13 +8,14 @@ EPOCHS = 100
 TRAIN_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 128
 SEED = 1000
-N_TASKS = 10
 
 # Load the MNIST dataset
 loader = GPULoading()
 train, test, shape, classes = loader.task_selection("mnist")
 
 # Define a simple model using Equinox
+
+
 class SimpleModel(eqx.Module):
     linear1: eqx.nn.Linear
     linear2: eqx.nn.Linear
@@ -30,11 +31,13 @@ class SimpleModel(eqx.Module):
         x = self.linear2(x)
         return x
 
+
 @jax.jit
 def loss_fn(model, images, labels):
     output = jax.vmap(model)(images)
     loss = -jnp.sum(jax.nn.log_softmax(output) * labels)
     return loss
+
 
 @jax.jit
 def train_fn(carry, data):
@@ -47,12 +50,14 @@ def train_fn(carry, data):
     model = optax.apply_updates(model, updates)
     return (model, opt_state), loss
 
+
 def test_fn(model, images, labels):
     output = jax.vmap(model)(images)
     pred = jnp.argmax(output, axis=-1)
     labels = jnp.argmax(labels, axis=-1)
-    accuracy = jnp.mean(pred == labels) 
+    accuracy = jnp.mean(pred == labels)
     return accuracy
+
 
 if __name__ == "__main__":
     # Initialize the model
@@ -70,27 +75,30 @@ if __name__ == "__main__":
     test_images = jnp.array(test.data, dtype=jnp.float32)
     test_labels = jnp.array(test.targets, dtype=jnp.int32)
     test_labels = jax.nn.one_hot(x=test_labels, num_classes=num_classes)
-    # Create n_tasks permutations for pixels of MNIST 784
-    permutations = [jax.random.permutation(rng, jnp.arange(784)) for _ in range(N_TASKS)]
     # Drop last elements if not divisible by BATCH_SIZE
-    train_images = train_images[:len(train_images) - len(train_images) % TRAIN_BATCH_SIZE]
-    train_labels = train_labels[:len(train_labels) - len(train_labels) % TRAIN_BATCH_SIZE]
-    test_images = test_images[:len(test_images) - len(test_images) % TEST_BATCH_SIZE]
-    test_labels = test_labels[:len(test_labels) - len(test_labels) % TEST_BATCH_SIZE]
-    for task in range(N_TASKS):
-        # Split into batches
-        task_train_images = jnp.array(jnp.split(train_images, len(train_images) // TRAIN_BATCH_SIZE))
-        task_train_labels = jnp.array(jnp.split(train_labels, len(train_labels) // TRAIN_BATCH_SIZE))   
-        test_train_images = jnp.array(jnp.split(test_images, len(test_images) // TEST_BATCH_SIZE))
-        test_train_labels = jnp.array(jnp.split(test_labels, len(test_labels) // TEST_BATCH_SIZE))
-        for epoch in tqdm(range(EPOCHS), desc="Epochs"):
-            (model, opt_state), loss = jax.lax.scan(f=train_fn, init=(model, opt_state), xs=(task_train_images, task_train_labels))
-            # Test the model and compute accuracy
-            if epoch % 5 == 0:
-                accuracy = jnp.mean(jax.vmap(test_fn, in_axes=(None, 0, 0))(model, test_train_images, test_train_labels))
-                tqdm.write(f"Epoch {epoch}, Loss: {loss.mean():.3f}, Accuracy: {accuracy*100:.2f}%")
-
-        
-        
-            
-            
+    train_images = train_images[:len(
+        train_images) - len(train_images) % TRAIN_BATCH_SIZE]
+    train_labels = train_labels[:len(
+        train_labels) - len(train_labels) % TRAIN_BATCH_SIZE]
+    test_images = test_images[:len(
+        test_images) - len(test_images) % TEST_BATCH_SIZE]
+    test_labels = test_labels[:len(
+        test_labels) - len(test_labels) % TEST_BATCH_SIZE]
+    # Split into batches
+    task_train_images = jnp.array(
+        jnp.split(train_images, len(train_images) // TRAIN_BATCH_SIZE))
+    task_train_labels = jnp.array(
+        jnp.split(train_labels, len(train_labels) // TRAIN_BATCH_SIZE))
+    test_train_images = jnp.array(
+        jnp.split(test_images, len(test_images) // TEST_BATCH_SIZE))
+    test_train_labels = jnp.array(
+        jnp.split(test_labels, len(test_labels) // TEST_BATCH_SIZE))
+    for epoch in tqdm(range(EPOCHS), desc="Epochs"):
+        (model, opt_state), loss = jax.lax.scan(f=train_fn, init=(
+            model, opt_state), xs=(task_train_images, task_train_labels))
+        # Test the model and compute accuracy
+        if epoch % 5 == 0:
+            accuracy = jnp.mean(jax.vmap(test_fn, in_axes=(None, 0, 0))(
+                model, test_train_images, test_train_labels))
+            tqdm.write(
+                f"Epoch {epoch}, Loss: {loss.mean():.3f}, Accuracy: {accuracy*100:.2f}%")

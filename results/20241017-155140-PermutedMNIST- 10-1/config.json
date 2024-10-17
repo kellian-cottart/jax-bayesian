@@ -1,0 +1,8 @@
+{
+    "task": "PermutedMNIST",
+    "n_tasks": 10,
+    "epochs": 1,
+    "train_batch_size": 64,
+    "test_batch_size": 128,
+    "seed": 1004
+}
