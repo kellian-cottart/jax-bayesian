@@ -66,14 +66,23 @@ def permute_and_test(model, permutations, image_batch, label_batch):
     return accuracies
 
 
+def prepare_data(data, targets, batch_size):
+    data = jnp.array(data, dtype=jnp.float32)
+    targets = jax.nn.one_hot(
+        jnp.array(targets, dtype=jnp.int32), num_classes=num_classes)
+    data, targets = data[:len(
+        data) - len(data) % batch_size], targets[:len(targets) - len(targets) % batch_size]
+    return data.reshape(-1, batch_size, *data.shape[1:]), targets.reshape(-1, batch_size, num_classes)
+
+
 if __name__ == "__main__":
 
     N_ITERATIONS = 1
     configurations = [
         {
-            "task": "PermutedMNIST",
-            "n_tasks": 10,
-            "epochs": 1,
+            "task": "MNIST",
+            "n_tasks": 1,
+            "epochs": 100,
             "train_batch_size": 1,
             "test_batch_size": 128,
             "seed": 1000 + i
@@ -97,7 +106,6 @@ if __name__ == "__main__":
         # save config
         with open(SAVE_PATH + "/config.json", "w") as f:
             json.dump(configuration, f, indent=4)
-
         # Load the MNIST dataset
         loader = GPULoading()
         train, test, shape, num_classes = loader.task_selection(
@@ -108,36 +116,15 @@ if __name__ == "__main__":
         if configuration["task"] == "PermutedMNIST":
             permutations = jnp.array(
                 [jax.random.permutation(key, jnp.array(shape).prod()) for key in jax.random.split(rng, configuration["n_tasks"])])
-
         model = SmallNetwork(rng)
         # Define the optimizer
         optimizer = optax.sgd(learning_rate=0.001)
         opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-        # Define the loss function
-        train_images = jnp.array(train.data, dtype=jnp.float32)
-        train_labels = jnp.array(train.targets, dtype=jnp.int32)
-        train_labels = jax.nn.one_hot(x=train_labels, num_classes=num_classes)
-        test_images = jnp.array(test.data, dtype=jnp.float32)
-        test_labels = jnp.array(test.targets, dtype=jnp.int32)
-        test_labels = jax.nn.one_hot(x=test_labels, num_classes=num_classes)
-        # Drop last elements if not divisible by batch_size to speed up training
-        train_images = train_images[:len(
-            train_images) - len(train_images) % configuration["train_batch_size"]]
-        train_labels = train_labels[:len(
-            train_labels) - len(train_labels) % configuration["train_batch_size"]]
-        test_images = test_images[:len(
-            test_images) - len(test_images) % configuration["test_batch_size"]]
-        test_labels = test_labels[:len(
-            test_labels) - len(test_labels) % configuration["test_batch_size"]]
-        # Split the datasets into batches
-        task_train_images = train_images.reshape(
-            -1, configuration["train_batch_size"], *train_images.shape[1:])
-        task_train_labels = train_labels.reshape(
-            -1, configuration["train_batch_size"], num_classes)
-        test_train_images = test_images.reshape(
-            -1, configuration["test_batch_size"], *test_images.shape[1:])
-        test_train_labels = test_labels.reshape(
-            -1, configuration["test_batch_size"], num_classes)
+        # Prepare datasets
+        task_train_images, task_train_labels = prepare_data(
+            train.data, train.targets, configuration["train_batch_size"])
+        test_train_images, test_train_labels = prepare_data(
+            test.data, test.targets, configuration["test_batch_size"])
 
         for task in tqdm(range(configuration["n_tasks"]), desc="Tasks"):
             tqdm.write(f"Task {task+1}/{configuration['n_tasks']}")
@@ -155,13 +142,11 @@ if __name__ == "__main__":
                     else:
                         accuracies = jnp.mean(jax.vmap(test_fn, in_axes=(None, 0, 0))(
                             model, test_train_images, test_train_labels))
-                    if isinstance(accuracies, jnp.ndarray):
-                        for i, acc in enumerate(accuracies):
-                            # print ten task acc max per line using \t
-                            tqdm.write(f"t{i}:{acc.item()*100:.2f}%", end="\t" if i % 10 !=
-                                       9 and i != len(accuracies) - 1 else "\n")
-                    else:
-                        tqdm.write(f"{accuracies.item()*100:.2f}%")
+                        accuracies = jnp.array([accuracies])
+                    for i, acc in enumerate(accuracies):
+                        # print ten task acc max per line using \t
+                        tqdm.write(f"t{i}:{acc.item()*100:.2f}%", end="\t" if i % 10 !=
+                                   9 and i != len(accuracies) - 1 else "\n")
                     tqdm.write(
                         f"Epoch {epoch+1}/{configuration['epochs']} - Loss: {loss.mean():.2f}")
                     # save accuracy as jax array
