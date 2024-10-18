@@ -30,7 +30,6 @@ def mesu(
         def check_bayesian(path, param):
             if len(path) != 3:
                 raise ValueError("The network doesn't have 2 parameters.")
-            # path[2] is dictkey
             if not ("mu" in path[2].name or "sigma" in path[2].name):
                 raise ValueError(
                     "All parameters should be Bayesian, i.e contain mu or sigma in their parameters.")
@@ -53,14 +52,18 @@ def mesu(
 
         def update_mesu(param, grad, prior):
             """ Update the parameters based on the gradients and the prior"""
+            if clamp_grad > 0:
+                grad = jax.tree_util.tree_map(
+                    lambda x: jnp.clip(x, -clamp_grad/param.sigma, clamp_grad/param.sigma), grad)
             # Update mu
-            sigma_sq = param.sigma ** 2
+            variance = param.sigma ** 2
             sigma_p_sq = prior.sigma ** 2
-            mu_update = param.mu - lr_mu * sigma_sq * grad.mu + lr_mu * sigma_sq / \
-                (N_mu * sigma_p_sq) * (prior.mu - param.mu)
+            mu_update = param.mu + lr_mu * \
+                variance * (-grad.mu + (prior.mu - param.mu) /
+                            (N_mu * sigma_p_sq))
             # Update sigma
-            sigma_update = param.sigma - 0.5 * lr_sigma * sigma_sq * grad.sigma + 0.5 * lr_sigma * param.sigma / (N_sigma * sigma_p_sq) * (
-                sigma_p_sq - sigma_sq)
+            sigma_update = param.sigma + 0.5 * lr_sigma * (- variance * grad.sigma + param.sigma / (N_sigma * sigma_p_sq) * (
+                sigma_p_sq - variance))
 
             def update_param(path, param):
                 """ Update the parameters based on the path by iterating the tree
@@ -73,7 +76,7 @@ def mesu(
 
         def discriminant(param):
             """ Discriminate between Bayesian parameters"""
-            return hasattr(param, 'mu') and hasattr(param, 'sigma')
+            return hasattr(param, 'mu') and hasattr(param, 'sigma') and param.mu is not None and param.sigma is not None
 
         updates = jax.tree.map(update_mesu, params,
                                gradients, state['prior'], is_leaf=discriminant)

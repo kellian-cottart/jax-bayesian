@@ -13,33 +13,6 @@ from optimizers import *
 
 
 @ft.partial(jax.jit, static_argnames=("samples"))
-def loss_fn(model, images, labels, perm=None, samples=None, rng=None):
-    if perm is not None:
-        images = images.reshape(
-            images.shape[0], -1)[:, perm].reshape(images.shape)
-    if samples is not None:
-        key, rng = jax.random.split(rng)
-        output = jax.vmap(model, in_axes=(0, None, None))(
-            images, samples, key).mean(axis=1)
-    else:
-        output = jax.vmap(model)(images)
-    loss = -jnp.sum(jax.nn.log_softmax(output) * labels)
-    return loss
-
-
-@ft.partial(jax.jit, static_argnames=("samples"))
-def train_fn(carry, data, samples=None):
-    model, opt_state, perm, rng = carry
-    images, labels = data
-    # Compute the loss
-    loss, grads = eqx.filter_value_and_grad(loss_fn)(
-        model, images, labels, perm, samples, rng)
-    # Update
-    model, opt_state = optimizer.update(model, grads, opt_state)
-    return (model, opt_state, perm, rng), loss
-
-
-@ft.partial(jax.jit, static_argnames=("samples"))
 def test_fn(model, images, labels, samples=None, rng=None):
     if samples is not None:
         output = jax.vmap(model, in_axes=(0, None, None))(
@@ -122,6 +95,49 @@ def configure_optimizer(configuration, model):
     return optimizer, opt_state
 
 
+@ft.partial(jax.jit, static_argnames=("samples"))
+def loss_fn(model, images, labels, perm=None, samples=None, rng=None):
+    """ Loss function for the model. Receives the model, images, labels, permutation and samples and returns the loss.
+
+    Args:
+        model: the model
+        images: the images
+        labels: the labels
+        perm: the permutation of MNIST if the task is PermutedMNIST
+        samples: the number of samples for the model if it is a Bayesian model
+        rng: the random key
+    """
+    if perm is not None:
+        images = images.reshape(
+            images.shape[0], -1)[:, perm].reshape(images.shape)
+    if samples is not None:
+        output = jax.vmap(model, in_axes=(0, None, None))(
+            images, samples, rng).mean(axis=1)
+    else:
+        output = jax.vmap(model)(images)
+    return -jnp.sum(jax.nn.log_softmax(output) * labels)
+
+
+@ ft.partial(jax.jit, static_argnames=("samples"))
+def train_fn(carry, data, samples=None):
+    """ Training function for models. Receives one batch of data and updates the model by computing the
+    loss and its gradients.
+
+    Args:
+        carry: tuple containing the model, optimizer state, permutation and random key
+        data: tuple containing the images and labels
+        samples: number of samples for the model. If None, no sampling is performed.
+    """
+    model, opt_state, perm, rng = carry
+    images, labels = data
+    # Compute the loss
+    loss, grads = eqx.filter_value_and_grad(loss_fn)(
+        model, images, labels, perm, samples, rng)
+    # Update
+    model, opt_state = optimizer.update(model, grads, opt_state)
+    return (model, opt_state, perm, rng), loss
+
+
 # {
 #     "network": "mlp",
 #     "network_params":   {
@@ -145,25 +161,25 @@ if __name__ == "__main__":
         {
             "network": "bayesianmlp",
             "network_params":   {
-                "sigma_init": 0.1,
+                "sigma_init": 0.2,
             },
             "optimizer": "mesu",
             "optimizer_params": {
                 "lr_mu": 1,
                 "lr_sigma": 1,
                 "mu_prior": 0,
-                "N_mu": 100_000,
-                "N_sigma": 100_000,
-                "clamp_grad": 0,
+                "N_mu": 300_000,
+                "N_sigma": 300_000,
+                "clamp_grad": 0.05,
             },
-            "task": "PermutedMNIST",
-            "n_train_samples": 1,
-            "n_test_samples": 1,
-            "n_tasks": 10,
-            "epochs": 1,
+            "task": "MNIST",
+            "n_train_samples": 8,
+            "n_test_samples": 8,
+            "n_tasks": 1,
+            "epochs": 100,
             "train_batch_size": 1,
             "test_batch_size": 128,
-            "seed": 1000 + i,
+            "seed": 0 + i,
             "max_perm_parallel": 25,
         } for i in range(N_ITERATIONS)
     ]
@@ -185,11 +201,9 @@ if __name__ == "__main__":
         os.makedirs(CONFIGURATION_PATH, exist_ok=True)
         os.makedirs(SAVE_PATH, exist_ok=True)
         os.makedirs(DATA_PATH, exist_ok=True)
-
         # save config
         with open(SAVE_PATH + "/config.json", "w") as f:
             json.dump(configuration, f, indent=4)
-
         try:
             # Load the MNIST dataset
             loader = GPULoading()
@@ -201,7 +215,6 @@ if __name__ == "__main__":
             if configuration["task"] == "PermutedMNIST":
                 permutations = jnp.array(
                     [jax.random.permutation(key, jnp.array(shape).prod()) for key in jax.random.split(rng, configuration["n_tasks"])])
-
             model = configure_networks(configuration, rng)
             optimizer, opt_state = configure_optimizer(configuration, model)
             # Prepare datasets
@@ -217,7 +230,6 @@ if __name__ == "__main__":
                 tqdm.write(f"Task {task+1}/{configuration['n_tasks']}")
                 # Train the model
                 for epoch in tqdm(range(configuration["epochs"]), desc="Epochs"):
-
                     special_perm = permutations[task] if configuration["task"] == "PermutedMNIST" else None
                     (model, opt_state, _, _), loss = jax.lax.scan(f=ft.partial(train_fn, samples=train_samples), init=(
                         model, opt_state, special_perm, rng), xs=(task_train_images, task_train_labels))
@@ -228,9 +240,8 @@ if __name__ == "__main__":
                             accuracies = jax.vmap(permute_and_test, in_axes=(None, None, 0, 0, None, None, None))(
                                 model, permutations, test_train_images, test_train_labels, configuration["max_perm_parallel"], test_samples, rng).mean(axis=0)
                         else:
-                            accuracies = jnp.mean(jax.vmap(test_fn, in_axes=(None, 0, 0, None, None))(
-                                model, test_train_images, test_train_labels, test_samples, rng))
-                            accuracies = jnp.array([accuracies])
+                            accuracies = jnp.array([jax.vmap(test_fn, in_axes=(None, 0, 0, None, None))(
+                                model, test_train_images, test_train_labels, test_samples, rng).mean()])
                         for i, acc in enumerate(accuracies):
                             tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
                                        9 and i != len(accuracies) - 1 else "\n")

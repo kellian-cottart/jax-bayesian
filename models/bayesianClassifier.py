@@ -3,9 +3,8 @@ from equinox import _misc
 from jax.random import split, normal, uniform
 from jax.nn import relu
 from jax.numpy import reshape, ones
-from jax import vmap
-from jax.numpy import dot, shape, broadcast_to
-from typing import Literal, Optional, Union
+from jax.numpy import shape, broadcast_to, einsum
+from typing import Literal, Union
 from jaxtyping import PRNGKeyArray, Array
 from math import sqrt
 
@@ -84,19 +83,13 @@ class BayesianLinear(Module, strict=True):
         """
         if len(shape(x)) == 1:
             x = broadcast_to(x, (samples, *shape(x)))
-        mu = broadcast_to(self.weight.mu, (samples, *shape(self.weight.mu)))
-        sigma = broadcast_to(
-            self.weight.sigma, (samples, *shape(self.weight.sigma)))
-        key = split(key)[0]
-        weights = mu + sigma * normal(key, shape(mu))
-        output = vmap(lambda w, x: dot(w, x), in_axes=(0, 0))(weights, x)
+        wkey, bkey = split(key, 2)
+        weights = self.weight.mu + self.weight.sigma * \
+            normal(wkey, (samples, *shape(self.weight.mu)))
+        output = einsum("sp, sop -> so", x, weights)
         if self.use_bias:
-            bias_mu = broadcast_to(
-                self.bias.mu, (samples, *shape(self.bias.mu)))
-            bias_sigma = broadcast_to(
-                self.bias.sigma, (samples, *shape(self.bias.sigma)))
-            key = split(key)[0]
-            biases = bias_mu + bias_sigma * normal(key, shape(bias_mu))
+            biases = self.bias.mu + self.bias.sigma * \
+                normal(bkey, (samples, *shape(self.bias.mu)))
             output = output + biases
         return output
 
@@ -113,7 +106,8 @@ class SmallBayesianNetwork(Module):
             50, 10, use_bias=False, key=key2, sigma_init=sigma_init)
 
     def __call__(self, x, samples, key):
+        key1, key2 = split(key)
         x = reshape(x, (-1))
-        x = relu(self.linear1(x, samples=samples, key=key))
-        x = self.linear2(x, samples=samples, key=key)
+        x = relu(self.linear1(x, samples=samples, key=key1))
+        x = self.linear2(x, samples=samples, key=key2)
         return x
