@@ -1,0 +1,20 @@
+{
+    "network": "bayesianmlp",
+    "network_params": {
+        "sigma_init": 0.1
+    },
+    "optimizer": "sgd",
+    "optimizer_params": {
+        "learning_rate": 0.001
+    },
+    "task": "MNIST",
+    "n_train_samples": 5,
+    "n_test_samples": 5,
+    "n_tasks": 1,
+    "epochs": 100,
+    "train_batch_size": 1,
+    "test_batch_size": 128,
+    "seed": 1000,
+    "max_perm_parallel": 25,
+    "sigma_init": 0.1
+}
