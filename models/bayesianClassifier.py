@@ -54,7 +54,7 @@ class BayesianLinear(Module, strict=True):
         wkey, bkey = split(key, 2)
         in_features_ = 1 if in_features == "scalar" else in_features
         out_features_ = 1 if out_features == "scalar" else out_features
-        lim = 1 / sqrt(in_features_)
+        lim = 2 / sqrt(in_features_)
         wshape = (out_features_, in_features_)
         bshape = (out_features_,)
 

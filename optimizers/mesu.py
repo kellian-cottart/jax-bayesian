@@ -33,12 +33,8 @@ def mesu(
             if not ("mu" in path[2].name or "sigma" in path[2].name):
                 raise ValueError(
                     "All parameters should be Bayesian, i.e contain mu or sigma in their parameters.")
-            if "sigma" in path[2].name:
-                return param.copy()
-            elif "mu" in path[2].name:
-                return jnp.ones_like(param) * mu_prior
             else:
-                return param.copy()
+                return param
 
         prior = jax.tree_util.tree_map_with_path(check_bayesian, params)
         return {
@@ -55,15 +51,14 @@ def mesu(
             if clamp_grad > 0:
                 grad = jax.tree_util.tree_map(
                     lambda x: jnp.clip(x, -clamp_grad/param.sigma, clamp_grad/param.sigma), grad)
-            # Update mu
             variance = param.sigma ** 2
-            sigma_p_sq = prior.sigma ** 2
-            mu_update = param.mu + lr_mu * \
-                variance * (-grad.mu + (prior.mu - param.mu) /
-                            (N_mu * sigma_p_sq))
-            # Update sigma
-            sigma_update = param.sigma + 0.5 * lr_sigma * (- variance * grad.sigma + param.sigma / (N_sigma * sigma_p_sq) * (
-                sigma_p_sq - variance))
+            prior_attraction_mu = variance * \
+                (mu_prior - param.mu) / (N_mu * (prior.sigma ** 2))
+            prior_attraction_sigma = param.sigma * \
+                (prior.sigma ** 2 - variance) / (N_sigma * (prior.sigma ** 2))
+            mu_update = param.mu + (-variance * grad.mu + prior_attraction_mu)
+            sigma_update = param.sigma + 0.5 * \
+                (- variance * grad.sigma + prior_attraction_sigma)
 
             def update_param(path, param):
                 """ Update the parameters based on the path by iterating the tree

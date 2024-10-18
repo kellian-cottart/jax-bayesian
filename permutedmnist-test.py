@@ -16,12 +16,12 @@ from optimizers import *
 def test_fn(model, images, labels, samples=None, rng=None):
     if samples is not None:
         output = jax.vmap(model, in_axes=(0, None, None))(
-            images, samples, rng).mean(axis=1)
+            images, samples, split(rng)[0]).mean(axis=1)
     else:
         output = jax.vmap(model)(images)
-    pred = jnp.argmax(output, axis=-1)
+    predictions = jnp.argmax(output, axis=-1)
     labels = jnp.argmax(labels, axis=-1)
-    accuracy = jnp.mean(pred == labels)
+    accuracy = (predictions == labels).mean()
     return accuracy
 
 
@@ -32,7 +32,7 @@ def test_batch_permutation_fn(model, image_batch, label_batch, batched_permutati
         task_images = image_batch.reshape(
             image_batch.shape[0], -1)[:, perm].reshape(image_batch.shape)
         accuracies = accuracies.at[i].set(
-            test_fn(model, task_images, label_batch, samples, rng))
+            test_fn(model, task_images, label_batch, samples, split(rng)[0]))
     return accuracies
 
 
@@ -42,7 +42,7 @@ def permute_and_test(model, permutations, image_batch, label_batch, max_perm_par
     batched_permutations = jnp.array(
         jnp.split(permutations, len(permutations) // max_perm_parallel)) if len(permutations) > max_perm_parallel else jnp.array([permutations])
     accuracies = jax.vmap(test_batch_permutation_fn, in_axes=(None, None, None, 0, None, None))(
-        model, image_batch, label_batch, batched_permutations, samples, rng)
+        model, image_batch, label_batch, batched_permutations, samples, split(rng)[0])
     # Flatten the results in the first two dimensions
     accuracies = accuracies.reshape(
         accuracies.shape[0] * accuracies.shape[1], -1)
@@ -112,13 +112,13 @@ def loss_fn(model, images, labels, samples=None, rng=None):
     """
     if samples is not None:
         predictions = jax.vmap(model, in_axes=(0, None, None))(
-            images, samples, rng)
+            images, samples, split(rng)[0])
         output = jax.nn.log_softmax(
             predictions, axis=-1).mean(axis=1) * labels
     else:
         predictions = jax.vmap(model)(images)
         output = jax.nn.log_softmax(predictions, axis=-1) * labels
-    loss = -jnp.sum(jnp.clip(output, -10, -1e-4), axis=-1).sum()
+    loss = -jnp.sum(output, axis=-1).sum()
     return loss, predictions
 
 
@@ -164,12 +164,12 @@ if __name__ == "__main__":
                 "clamp_grad": 1,
             },
             "task": "PermutedMNIST",
-            "n_train_samples": 8,
-            "n_test_samples": 8,
+            "n_train_samples": 10,
+            "n_test_samples": 10,
             "n_tasks": 100,
             "epochs": 1,
             "train_batch_size": 1,
-            "test_batch_size": 128,
+            "test_batch_size": 100,
             "max_perm_parallel": 25,
             "seed": 0+i
         } for i in range(N_ITERATIONS)
@@ -218,21 +218,23 @@ if __name__ == "__main__":
             test_samples = configuration["n_test_samples"] if "n_test_samples" in configuration else None
             pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
             for task in pbar:
+                key = jax.random.split(rng)[0]
                 for epoch in range(configuration["epochs"]):
+                    rng1, rng2 = jax.random.split(key)
                     pbar.set_description(
                         f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
                     special_perm = permutations[task] if configuration["task"] == "PermutedMNIST" else None
                     (model, opt_state, _, _), (loss, predictions) = jax.lax.scan(f=ft.partial(train_fn, samples=train_samples), init=(
-                        model, opt_state, special_perm, rng), xs=(task_train_images, task_train_labels))
+                        model, opt_state, special_perm, rng1), xs=(task_train_images, task_train_labels))
                     # Test the model and compute accuracy
                     if epoch % 1 == 0:
                         if configuration["task"] == "PermutedMNIST":
                             accuracies = jnp.zeros(configuration["n_tasks"])
                             accuracies = jax.vmap(permute_and_test, in_axes=(None, None, 0, 0, None, None, None))(
-                                model, permutations, test_train_images, test_train_labels, configuration["max_perm_parallel"], test_samples, rng).mean(axis=0)
+                                model, permutations, test_train_images, test_train_labels, configuration["max_perm_parallel"], test_samples, rng2).mean(axis=0)
                         else:
                             accuracies = jnp.array([jax.vmap(test_fn, in_axes=(None, 0, 0, None, None))(
-                                model, test_train_images, test_train_labels, test_samples, rng).mean()])
+                                model, test_train_images, test_train_labels, test_samples, rng2).mean()])
                         tqdm.write("=" * 20)
                         for i, acc in enumerate(accuracies):
                             tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
