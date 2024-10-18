@@ -1,23 +1,29 @@
-from equinox import Module, field, filter_jit
+from equinox import Module, field
 from equinox import _misc
 from jax.random import split, normal, uniform
 from jax.nn import relu
 from jax.numpy import reshape, ones
-from jax import jit, vmap
-from jax.numpy import dot, shape, broadcast_to, einsum
+from jax import vmap
+from jax.numpy import dot, shape, broadcast_to
 from typing import Literal, Optional, Union
 from jaxtyping import PRNGKeyArray, Array
 from math import sqrt
-from functools import partial
+
+
+class GaussianParameter(Module):
+    mu: Array
+    sigma: Array
+
+    def __init__(self, mu: Array, sigma: Array):
+        self.mu = mu
+        self.sigma = sigma
 
 
 class BayesianLinear(Module, strict=True):
     """Performs a linear transformation."""
 
-    weight_mu: Array
-    weight_sigma: Array
-    bias_mu: Optional[Array]
-    bias_sigma: Optional[Array]
+    weight: dict[str, Array]
+    bias: dict[str, Array]
     in_features: Union[int, Literal["scalar"]] = field(static=True)
     out_features: Union[int, Literal["scalar"]] = field(static=True)
     use_bias: bool = field(static=True)
@@ -43,7 +49,7 @@ class BayesianLinear(Module, strict=True):
             dtype: The dtype to use for the weight and the bias in this layer.
                 Defaults to either `jax.numpy.float32` or `jax.numpy.float64` depending
                 on whether JAX is in 64-bit mode.
-            key: A `jax.random.PRNGKey` used to provide randomness for parameter
+            key: A `jax.random.PRNGKey` used to provide randomness for GaussianParameter
                 initialisation. (Keyword only argument.)
         """
         dtype = _misc.default_floating_dtype() if dtype is None else dtype
@@ -52,13 +58,17 @@ class BayesianLinear(Module, strict=True):
         out_features_ = 1 if out_features == "scalar" else out_features
         lim = 1 / sqrt(in_features_)
         wshape = (out_features_, in_features_)
-        # initalizing mu as 1/sqrt(in_features) uniformly
-        self.weight_mu = uniform(wkey, wshape, minval=-lim, maxval=lim)
-        self.weight_sigma = ones(wshape, dtype)*sigma_init
         bshape = (out_features_,)
-        self.bias_mu = uniform(bkey, bshape, minval=-lim,
-                               maxval=lim) if use_bias else None
-        self.bias_sigma = ones(bshape, dtype)*sigma_init if use_bias else None
+
+        # Replace the placeholder with the following code
+        self.weight = GaussianParameter(
+            mu=uniform(wkey, wshape, minval=-lim, maxval=lim),
+            sigma=ones(wshape, dtype) * sigma_init,
+        )
+        self.bias = GaussianParameter(
+            mu=uniform(bkey, bshape, minval=-lim, maxval=lim),
+            sigma=ones(bshape, dtype) * sigma_init,
+        )
         self.in_features = in_features
         self.out_features = out_features
         self.use_bias = use_bias
@@ -72,26 +82,23 @@ class BayesianLinear(Module, strict=True):
             samples: number of samples
             rng: random key
         """
-        # we need to do
-        # broadcast x if needed, weights and sigma
         if len(shape(x)) == 1:
-            # repeat the content of x samples times
             x = broadcast_to(x, (samples, *shape(x)))
-        mu = broadcast_to(self.weight_mu, (samples, *shape(self.weight_mu)))
+        mu = broadcast_to(self.weight.mu, (samples, *shape(self.weight.mu)))
         sigma = broadcast_to(
-            self.weight_sigma, (samples, *shape(self.weight_sigma)))
+            self.weight.sigma, (samples, *shape(self.weight.sigma)))
+        key = split(key)[0]
         weights = mu + sigma * normal(key, shape(mu))
-
         output = vmap(lambda w, x: dot(w, x), in_axes=(0, 0))(weights, x)
         if self.use_bias:
-            biases = vmap(sample_fn, in_axes=(0, 0, 0))(
-                self.bias_mu, self.bias_sigma, split(key, samples))
+            bias_mu = broadcast_to(
+                self.bias.mu, (samples, *shape(self.bias.mu)))
+            bias_sigma = broadcast_to(
+                self.bias.sigma, (samples, *shape(self.bias.sigma)))
+            key = split(key)[0]
+            biases = bias_mu + bias_sigma * normal(key, shape(bias_mu))
             output = output + biases
         return output
-
-
-def sample_fn(mu, sigma, key):
-    return mu + sigma * normal(key, shape(mu))
 
 
 class SmallBayesianNetwork(Module):

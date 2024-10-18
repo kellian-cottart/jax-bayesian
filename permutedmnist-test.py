@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-import optax
 from tqdm import tqdm
 from dataloader import *
 from models import *
@@ -10,6 +9,7 @@ import os
 import json
 import functools as ft
 from shutil import rmtree
+from optimizers import *
 
 
 @ft.partial(jax.jit, static_argnames=("samples"))
@@ -32,11 +32,10 @@ def train_fn(carry, data, samples=None):
     model, opt_state, perm, rng = carry
     images, labels = data
     # Compute the loss
-    loss, params = jax.value_and_grad(loss_fn)(
+    loss, grads = eqx.filter_value_and_grad(loss_fn)(
         model, images, labels, perm, samples, rng)
     # Update
-    updates, opt_state = optimizer.update(params, opt_state)
-    model = optax.apply_updates(model, updates)
+    model, opt_state = optimizer.update(model, grads, opt_state)
     return (model, opt_state, perm, rng), loss
 
 
@@ -53,24 +52,24 @@ def test_fn(model, images, labels, samples=None, rng=None):
     return accuracy
 
 
-@ eqx.filter_jit
-def test_batch_permutation_fn(model, image_batch, label_batch, batched_permutations):
+@ft.partial(jax.jit, static_argnames=("samples"))
+def test_batch_permutation_fn(model, image_batch, label_batch, batched_permutations, samples=None, rng=None):
     accuracies = jnp.zeros(len(batched_permutations))
     for i, perm in enumerate(batched_permutations):
         task_images = image_batch.reshape(
             image_batch.shape[0], -1)[:, perm].reshape(image_batch.shape)
         accuracies = accuracies.at[i].set(
-            test_fn(model, task_images, label_batch))
+            test_fn(model, task_images, label_batch, samples, rng))
     return accuracies
 
 
-@ eqx.filter_jit
-def permute_and_test(model, permutations, image_batch, label_batch, max_perm_parallel=25):
+@ft.partial(jax.jit, static_argnames=("samples", "max_perm_parallel"))
+def permute_and_test(model, permutations, image_batch, label_batch, max_perm_parallel=25, samples=None, rng=None):
     """ We can't fit everything in one GPU when using too many permutations, so we must split permutations into batches """
     batched_permutations = jnp.array(
         jnp.split(permutations, len(permutations) // max_perm_parallel)) if len(permutations) > max_perm_parallel else jnp.array([permutations])
-    accuracies = jax.vmap(test_batch_permutation_fn, in_axes=(None, None, None, 0))(
-        model, image_batch, label_batch, batched_permutations)
+    accuracies = jax.vmap(test_batch_permutation_fn, in_axes=(None, None, None, 0, None, None))(
+        model, image_batch, label_batch, batched_permutations, samples, rng)
     # Flatten the results in the first two dimensions
     accuracies = accuracies.reshape(
         accuracies.shape[0] * accuracies.shape[1], -1)
@@ -105,9 +104,10 @@ def configure_networks(configuration, rng):
 
 
 def configure_optimizer(configuration, model):
+
     select_optimizer = {
-        "sgd": optax.sgd,
-        "adam": optax.adam,
+        "sgd": sgd,
+        "mesu": mesu,
     }
     if not "optimizer_params" in configuration:
         raise ValueError("Optimizer parameters not found")
@@ -122,28 +122,49 @@ def configure_optimizer(configuration, model):
     return optimizer, opt_state
 
 
+# {
+#     "network": "mlp",
+#     "network_params":   {
+#     },
+#     "optimizer": "sgd",
+#     "optimizer_params": {
+#         "lr": 0.001,
+#     },
+#     "task": "MNIST",
+#             "n_tasks": 1,
+#             "epochs": 100,
+#             "train_batch_size": 1,
+#             "test_batch_size": 128,
+#             "seed": 1000 + i,
+#             "max_perm_parallel": 25,
+# }
+
 if __name__ == "__main__":
     N_ITERATIONS = 1
     configurations = [
         {
             "network": "bayesianmlp",
             "network_params":   {
-                "sigma_init": 0.1
+                "sigma_init": 0.1,
             },
-            "optimizer": "sgd",
+            "optimizer": "mesu",
             "optimizer_params": {
-                "learning_rate": 0.001
+                "lr_mu": 1,
+                "lr_sigma": 1,
+                "mu_prior": 0,
+                "N_mu": 100_000,
+                "N_sigma": 100_000,
+                "clamp_grad": 0,
             },
-            "task": "MNIST",
+            "task": "PermutedMNIST",
             "n_train_samples": 1,
             "n_test_samples": 1,
-            "n_tasks": 1,
-            "epochs": 100,
+            "n_tasks": 10,
+            "epochs": 1,
             "train_batch_size": 1,
             "test_batch_size": 128,
             "seed": 1000 + i,
             "max_perm_parallel": 25,
-            "sigma_init": 0.1,
         } for i in range(N_ITERATIONS)
     ]
     # convert all fields to lowercase if string
@@ -204,8 +225,8 @@ if __name__ == "__main__":
                     if epoch % 1 == 0:
                         if configuration["task"] == "PermutedMNIST":
                             accuracies = jnp.zeros(configuration["n_tasks"])
-                            accuracies = jax.vmap(permute_and_test, in_axes=(None, None, 0, 0, None))(
-                                model, permutations, test_train_images, test_train_labels, configuration["max_perm_parallel"]).mean(dim=0)
+                            accuracies = jax.vmap(permute_and_test, in_axes=(None, None, 0, 0, None, None, None))(
+                                model, permutations, test_train_images, test_train_labels, configuration["max_perm_parallel"], test_samples, rng).mean(axis=0)
                         else:
                             accuracies = jnp.mean(jax.vmap(test_fn, in_axes=(None, 0, 0, None, None))(
                                 model, test_train_images, test_train_labels, test_samples, rng))
@@ -218,8 +239,6 @@ if __name__ == "__main__":
                         # Save accuracy as jax array
                         with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
                             jnp.save(f, accuracies)
-        except KeyboardInterrupt as e:
+        except (KeyboardInterrupt, SystemExit, Exception) as e:
+            print(e)
             rmtree(SAVE_PATH)
-        except Exception as e:
-            rmtree(SAVE_PATH)
-            raise e
