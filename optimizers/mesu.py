@@ -56,8 +56,9 @@ def mesu(
                 (mu_prior - param.mu) / (N_mu * (prior.sigma ** 2))
             prior_attraction_sigma = param.sigma * \
                 (prior.sigma ** 2 - variance) / (N_sigma * (prior.sigma ** 2))
-            mu_update = param.mu + (-variance * grad.mu + prior_attraction_mu)
-            sigma_update = param.sigma + 0.5 * \
+            mu_update = param.mu + lr_mu * \
+                (-variance * grad.mu + prior_attraction_mu)
+            sigma_update = param.sigma + lr_sigma*0.5 * \
                 (- variance * grad.sigma + prior_attraction_sigma)
 
             def update_param(path, param):

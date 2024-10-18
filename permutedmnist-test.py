@@ -152,7 +152,7 @@ if __name__ == "__main__":
         {
             "network": "bayesianmlp",
             "network_params": {
-                "sigma_init": 0.1,
+                "sigma_init": 0.2,
             },
             "optimizer": "mesu",
             "optimizer_params": {
@@ -161,7 +161,7 @@ if __name__ == "__main__":
                 "mu_prior": 0,
                 "N_mu": 200_000,
                 "N_sigma": 200_000,
-                "clamp_grad": 1,
+                "clamp_grad": 0.1,
             },
             "task": "PermutedMNIST",
             "n_train_samples": 10,

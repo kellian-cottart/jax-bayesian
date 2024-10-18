@@ -6,6 +6,7 @@ from jax.numpy import shape, broadcast_to, einsum, dot, expand_dims,  reshape, o
 from typing import Literal, Union
 from jaxtyping import PRNGKeyArray, Array
 from math import sqrt
+import jax
 
 
 class GaussianParameter(Module):
