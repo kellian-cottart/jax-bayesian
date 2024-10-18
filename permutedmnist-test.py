@@ -60,6 +60,8 @@ def prepare_data(data, targets, batch_size):
 
 def configure_networks(configuration, rng):
 
+    print("Configuring network with configuration: ",
+          configuration["network"])
     # make a dictionary of maps
     select_network = {
         "bayesianmlp": SmallBayesianNetwork,
@@ -77,7 +79,8 @@ def configure_networks(configuration, rng):
 
 
 def configure_optimizer(configuration, model):
-
+    print("Configuring optimizer with configuration: ",
+          configuration["optimizer"])
     select_optimizer = {
         "sgd": sgd,
         "mesu": mesu,
@@ -96,7 +99,7 @@ def configure_optimizer(configuration, model):
 
 
 @ft.partial(jax.jit, static_argnames=("samples"))
-def loss_fn(model, images, labels, perm=None, samples=None, rng=None):
+def loss_fn(model, images, labels, samples=None, rng=None):
     """ Loss function for the model. Receives the model, images, labels, permutation and samples and returns the loss.
 
     Args:
@@ -107,15 +110,16 @@ def loss_fn(model, images, labels, perm=None, samples=None, rng=None):
         samples: the number of samples for the model if it is a Bayesian model
         rng: the random key
     """
-    if perm is not None:
-        images = images.reshape(
-            images.shape[0], -1)[:, perm].reshape(images.shape)
     if samples is not None:
-        output = jax.vmap(model, in_axes=(0, None, None))(
-            images, samples, rng).mean(axis=1)
+        predictions = jax.vmap(model, in_axes=(0, None, None))(
+            images, samples, rng)
+        output = jax.nn.log_softmax(
+            predictions, axis=-1).mean(axis=1) * labels
     else:
-        output = jax.vmap(model)(images)
-    return -jnp.sum(jax.nn.log_softmax(output) * labels)
+        predictions = jax.vmap(model)(images)
+        output = jax.nn.log_softmax(predictions, axis=-1) * labels
+    loss = -jnp.sum(jnp.clip(output, -10, -1e-4), axis=-1).sum()
+    return loss, predictions
 
 
 @ ft.partial(jax.jit, static_argnames=("samples"))
@@ -131,56 +135,43 @@ def train_fn(carry, data, samples=None):
     model, opt_state, perm, rng = carry
     images, labels = data
     # Compute the loss
-    loss, grads = eqx.filter_value_and_grad(loss_fn)(
-        model, images, labels, perm, samples, rng)
+
+    if perm is not None:
+        images = images.reshape(
+            images.shape[0], -1)[:, perm].reshape(images.shape)
+    (loss, predictions), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
+        model, images, labels, samples, rng)
     # Update
     model, opt_state = optimizer.update(model, grads, opt_state)
-    return (model, opt_state, perm, rng), loss
+    return (model, opt_state, perm, rng), (loss, predictions)
 
-
-# {
-#     "network": "mlp",
-#     "network_params":   {
-#     },
-#     "optimizer": "sgd",
-#     "optimizer_params": {
-#         "lr": 0.001,
-#     },
-#     "task": "MNIST",
-#             "n_tasks": 1,
-#             "epochs": 100,
-#             "train_batch_size": 1,
-#             "test_batch_size": 128,
-#             "seed": 1000 + i,
-#             "max_perm_parallel": 25,
-# }
 
 if __name__ == "__main__":
     N_ITERATIONS = 1
     configurations = [
         {
             "network": "bayesianmlp",
-            "network_params":   {
-                "sigma_init": 0.2,
+            "network_params": {
+                "sigma_init": 0.1,
             },
             "optimizer": "mesu",
             "optimizer_params": {
                 "lr_mu": 1,
                 "lr_sigma": 1,
                 "mu_prior": 0,
-                "N_mu": 300_000,
-                "N_sigma": 300_000,
-                "clamp_grad": 0.05,
+                "N_mu": 200_000,
+                "N_sigma": 200_000,
+                "clamp_grad": 1,
             },
-            "task": "MNIST",
+            "task": "PermutedMNIST",
             "n_train_samples": 8,
             "n_test_samples": 8,
-            "n_tasks": 1,
-            "epochs": 100,
+            "n_tasks": 100,
+            "epochs": 1,
             "train_batch_size": 1,
             "test_batch_size": 128,
-            "seed": 0 + i,
             "max_perm_parallel": 25,
+            "seed": 0+i
         } for i in range(N_ITERATIONS)
     ]
     # convert all fields to lowercase if string
@@ -225,13 +216,13 @@ if __name__ == "__main__":
 
             train_samples = configuration["n_train_samples"] if "n_train_samples" in configuration else None
             test_samples = configuration["n_test_samples"] if "n_test_samples" in configuration else None
-
-            for task in tqdm(range(configuration["n_tasks"]), desc="Tasks"):
-                tqdm.write(f"Task {task+1}/{configuration['n_tasks']}")
-                # Train the model
-                for epoch in tqdm(range(configuration["epochs"]), desc="Epochs"):
+            pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
+            for task in pbar:
+                for epoch in range(configuration["epochs"]):
+                    pbar.set_description(
+                        f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
                     special_perm = permutations[task] if configuration["task"] == "PermutedMNIST" else None
-                    (model, opt_state, _, _), loss = jax.lax.scan(f=ft.partial(train_fn, samples=train_samples), init=(
+                    (model, opt_state, _, _), (loss, predictions) = jax.lax.scan(f=ft.partial(train_fn, samples=train_samples), init=(
                         model, opt_state, special_perm, rng), xs=(task_train_images, task_train_labels))
                     # Test the model and compute accuracy
                     if epoch % 1 == 0:
@@ -242,11 +233,10 @@ if __name__ == "__main__":
                         else:
                             accuracies = jnp.array([jax.vmap(test_fn, in_axes=(None, 0, 0, None, None))(
                                 model, test_train_images, test_train_labels, test_samples, rng).mean()])
+                        tqdm.write("=" * 20)
                         for i, acc in enumerate(accuracies):
                             tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
                                        9 and i != len(accuracies) - 1 else "\n")
-                        tqdm.write(
-                            f"Epoch {epoch+1}/{configuration['epochs']} - Loss: {loss.mean():.2f}")
                         # Save accuracy as jax array
                         with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
                             jnp.save(f, accuracies)

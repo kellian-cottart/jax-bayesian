@@ -2,8 +2,7 @@ from equinox import Module, field
 from equinox import _misc
 from jax.random import split, normal, uniform
 from jax.nn import relu
-from jax.numpy import reshape, ones
-from jax.numpy import shape, broadcast_to, einsum
+from jax.numpy import shape, broadcast_to, einsum, dot, expand_dims,  reshape, ones
 from typing import Literal, Union
 from jaxtyping import PRNGKeyArray, Array
 from math import sqrt
@@ -81,6 +80,15 @@ class BayesianLinear(Module, strict=True):
             samples: number of samples
             rng: random key
         """
+        if samples < 0:
+            raise ValueError(
+                "Number of samples must be a positive integer. Specify 0 for a deterministic forward pass.")
+        if samples == 0:
+            # dot product between input and weights
+            output = dot(self.weight.mu, x)
+            if self.use_bias:
+                output = output + self.bias.mu
+            return output
         if len(shape(x)) == 1:
             x = broadcast_to(x, (samples, *shape(x)))
         wkey, bkey = split(key, 2)
@@ -110,4 +118,4 @@ class SmallBayesianNetwork(Module):
         x = reshape(x, (-1))
         x = relu(self.linear1(x, samples=samples, key=key1))
         x = self.linear2(x, samples=samples, key=key2)
-        return x
+        return x if samples != 0 else expand_dims(x, 0)
