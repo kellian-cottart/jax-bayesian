@@ -1,4 +1,5 @@
 import jax
+import jax.experimental
 import jax.numpy as jnp
 import equinox as eqx
 from tqdm import tqdm
@@ -10,6 +11,7 @@ import json
 import functools as ft
 from shutil import rmtree
 from optimizers import *
+import traceback
 
 
 @ft.partial(jax.jit, static_argnames=("samples"))
@@ -99,30 +101,6 @@ def configure_optimizer(configuration, model):
 
 
 @ft.partial(jax.jit, static_argnames=("samples"))
-def loss_fn(model, images, labels, samples=None, rng=None):
-    """ Loss function for the model. Receives the model, images, labels, permutation and samples and returns the loss.
-
-    Args:
-        model: the model
-        images: the images
-        labels: the labels
-        perm: the permutation of MNIST if the task is PermutedMNIST
-        samples: the number of samples for the model if it is a Bayesian model
-        rng: the random key
-    """
-    if samples is not None:
-        predictions = jax.vmap(model, in_axes=(0, None, None))(
-            images, samples, split(rng)[0])
-        output = jax.nn.log_softmax(
-            predictions, axis=-1).mean(axis=1) * labels
-    else:
-        predictions = jax.vmap(model)(images)
-        output = jax.nn.log_softmax(predictions, axis=-1) * labels
-    loss = -jnp.sum(output, axis=-1).sum()
-    return loss, predictions
-
-
-@ ft.partial(jax.jit, static_argnames=("samples"))
 def train_fn(carry, data, samples=None):
     """ Training function for models. Receives one batch of data and updates the model by computing the
     loss and its gradients.
@@ -132,14 +110,35 @@ def train_fn(carry, data, samples=None):
         data: tuple containing the images and labels
         samples: number of samples for the model. If None, no sampling is performed.
     """
+    def loss_fn(model, images, labels, samples=None, rng=None):
+        """ Loss function for the model. Receives the model, images, labels, permutation and samples and returns the loss.
+
+        Args:
+            model: the model
+            images: the images
+            labels: the labels
+            perm: the permutation of MNIST if the task is PermutedMNIST
+            samples: the number of samples for the model if it is a Bayesian model
+            rng: the random key
+        """
+        if samples is not None:
+            predictions = jax.vmap(model, in_axes=(0, None, None))(
+                images, samples, split(rng)[0])
+            output = jax.nn.log_softmax(
+                predictions, axis=-1).mean(axis=1) * labels
+        else:
+            predictions = jax.vmap(model)(images)
+            output = jax.nn.log_softmax(predictions, axis=-1) * labels
+        loss = -jnp.sum(output, axis=-1).sum()
+        return loss, predictions
+
     model, opt_state, perm, rng = carry
     images, labels = data
     # Compute the loss
-
     if perm is not None:
         images = images.reshape(
             images.shape[0], -1)[:, perm].reshape(images.shape)
-    (loss, predictions), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
+    (loss, predictions), grads = jax.value_and_grad(loss_fn, has_aux=True)(
         model, images, labels, samples, rng)
     # Update
     model, opt_state = optimizer.update(model, grads, opt_state)
@@ -164,12 +163,12 @@ if __name__ == "__main__":
                 "clamp_grad": 0.1,
             },
             "task": "PermutedMNIST",
-            "n_train_samples": 10,
-            "n_test_samples": 10,
-            "n_tasks": 100,
+            "n_train_samples": 8,
+            "n_test_samples": 8,
+            "n_tasks": 10,
             "epochs": 1,
             "train_batch_size": 1,
-            "test_batch_size": 100,
+            "test_batch_size": 128,
             "max_perm_parallel": 25,
             "seed": 0+i
         } for i in range(N_ITERATIONS)
@@ -183,15 +182,17 @@ if __name__ == "__main__":
     for k, configuration in enumerate(configurations):
         FOLDER = TIMESTAMP + \
             configuration["task"] + \
-            f"- t={configuration['n_tasks']}-e={configuration['epochs']}"
+            f"-t={configuration['n_tasks']}-e={configuration['epochs']}"
         MAIN_FOLDER = "results"
         SAVE_PATH = os.path.join(MAIN_FOLDER, FOLDER)
         CONFIGURATION_PATH = os.path.join(SAVE_PATH, f"config{k}")
         DATA_PATH = os.path.join(CONFIGURATION_PATH, "data")
+        WEIGHTS_PATH = os.path.join(CONFIGURATION_PATH, "weights")
         os.makedirs(MAIN_FOLDER, exist_ok=True)
         os.makedirs(CONFIGURATION_PATH, exist_ok=True)
         os.makedirs(SAVE_PATH, exist_ok=True)
         os.makedirs(DATA_PATH, exist_ok=True)
+        os.makedirs(WEIGHTS_PATH, exist_ok=True)
         # save config
         with open(SAVE_PATH + "/config.json", "w") as f:
             json.dump(configuration, f, indent=4)
@@ -217,10 +218,12 @@ if __name__ == "__main__":
             train_samples = configuration["n_train_samples"] if "n_train_samples" in configuration else None
             test_samples = configuration["n_test_samples"] if "n_test_samples" in configuration else None
             pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
+            keys = jax.random.split(
+                rng, (configuration["n_tasks"], configuration["epochs"], 2))
             for task in pbar:
-                key = jax.random.split(rng)[0]
                 for epoch in range(configuration["epochs"]):
-                    rng1, rng2 = jax.random.split(key)
+                    rng1 = keys[task, epoch, 0]
+                    rng2 = keys[task, epoch, 1]
                     pbar.set_description(
                         f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
                     special_perm = permutations[task] if configuration["task"] == "PermutedMNIST" else None
@@ -242,6 +245,6 @@ if __name__ == "__main__":
                         # Save accuracy as jax array
                         with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
                             jnp.save(f, accuracies)
-        except (KeyboardInterrupt, SystemExit, Exception) as e:
-            print(e)
+        except (KeyboardInterrupt, SystemExit, Exception):
+            print(traceback.format_exc())
             rmtree(SAVE_PATH)
