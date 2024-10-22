@@ -7,6 +7,7 @@ from typing import Literal, Union
 from jaxtyping import PRNGKeyArray, Array
 from math import sqrt
 from models.gaussianParameter import *
+import jax
 
 
 class BayesianLinear(Module, strict=True):
@@ -108,10 +109,10 @@ class SmallBayesianNetwork(Module):
                            50, 10, use_bias=False, key=key2, sigma_init=sigma_init)]
 
     def __call__(self, x, samples, key):
-        keys = split(key, len(self.layers))
+        key = split(key, len(self.layers))
         for i, layer in enumerate(self.layers):
             if isinstance(layer, BayesianLinear):
-                x = layer(x, samples=samples, key=keys[i])
+                x = layer(x, samples=samples, key=key[i])
             else:   # activation function
                 x = layer(x)
         return x if samples != 0 else expand_dims(x, 0)

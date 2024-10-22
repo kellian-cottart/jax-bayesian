@@ -42,6 +42,26 @@ def configure_networks(configuration, rng):
     return model
 
 
+def configure_optimizer(configuration, model):
+    print("Configuring optimizer with configuration: ",
+          configuration["optimizer"])
+    select_optimizer = {
+        "sgd": sgd,
+        "mesu": mesu,
+    }
+    if not "optimizer_params" in configuration:
+        raise ValueError("Optimizer parameters not found")
+    try:
+        optimizer = select_optimizer[configuration["optimizer"]](
+            **configuration["optimizer_params"]
+        )
+    except KeyError as e:
+        raise KeyError("Error with provided keys: ", e)
+
+    opt_state = optimizer.init(model)
+    return optimizer, opt_state
+
+
 if __name__ == "__main__":
     N_ITERATIONS = 1
     configurations = [
@@ -57,7 +77,7 @@ if __name__ == "__main__":
                 "mu_prior": 0,
                 "N_mu": 200_000,
                 "N_sigma": 200_000,
-                "clamp_grad": 0.1
+                "clamp_grad": 0
             },
             "task": "PermutedMNIST",
             "n_train_samples": 8,
@@ -65,9 +85,9 @@ if __name__ == "__main__":
             "n_tasks": 10,
             "epochs": 1,
             "train_batch_size": 1,
-            "test_batch_size": 128,
-            "max_perm_parallel": 25,
-            "seed": 0+i
+            "test_batch_size": 100,
+            "max_perm_parallel": 1,
+            "seed": 1000+i
         } for i in range(N_ITERATIONS)
     ]
     # convert all fields to lowercase if string
@@ -108,41 +128,32 @@ if __name__ == "__main__":
             # Prepare datasets
             task_train_images, task_train_labels = prepare_data(
                 train.data, train.targets, configuration["train_batch_size"])
-            test_train_images, test_train_labels = prepare_data(
+            task_test_images, task_test_labels = prepare_data(
                 test.data, test.targets, configuration["test_batch_size"])
-            keys = jax.random.split(
-                rng, (configuration["n_tasks"], configuration["epochs"], 2))
             optimizer, opt_state = configure_optimizer(
                 configuration, eqx.filter(model, eqx.is_array))
             pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
             train_samples = configuration["n_train_samples"] if "n_train_samples" in configuration else None
             test_samples = configuration["n_test_samples"] if "n_test_samples" in configuration else None
+
+            # GENERATING A HUGE ARRAY OF KEYS, ASSURING THAT THE KEYS ARE UNIQUE
+            training_core_keys = jax.random.split(
+                rng, (configuration["n_tasks"], configuration["epochs"]))
+            testing_core_keys = jax.random.split(
+                rng, (configuration["n_tasks"], configuration["epochs"]))
             for task in pbar:
                 for epoch in range(configuration["epochs"]):
-                    rng1 = keys[task, epoch, 0]
-                    rng2 = keys[task, epoch, 1]
+                    train_ck = training_core_keys[task, epoch]
+                    test_ck = testing_core_keys[task, epoch]
                     pbar.set_description(
                         f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
                     special_perm = permutations[task] if configuration["task"] == "PermutedMNIST" else None
-
+                    # Split the model into dynamic and static parts
                     dynamic_init_state, static_state = eqx.partition(
                         model, eqx.is_array)
 
-                    @eqx.filter_jit
-                    def train_fn(dynamic_model, opt_state, perm, rng, optimizer, images, labels, samples=None):
-                        """Training function for models. Receives one batch of data and updates the model by computing the
-                        loss and its gradients.
-
-                        Args:
-                            dynamic_model: The dynamic part of the model.
-                            opt_state: The state of the optimizer.
-                            perm: Permutation to apply to the images.
-                            rng: Random key for JAX operations.
-                            optimizer: The optimizer to use for updating the model.
-                            images: Batch of images.
-                            labels: Batch of labels.
-                            samples: Number of samples for the model. If None, no sampling is performed.
-                        """
+                    @ eqx.filter_jit
+                    def train_fn(dynamic_model, opt_state, perm, keys, optimizer, images, labels, samples=None):
                         # Apply permutation if provided
                         if perm is not None:
                             images = images.reshape(
@@ -150,32 +161,34 @@ if __name__ == "__main__":
                         # Combine dynamic and static parts of the model
                         model = eqx.combine(dynamic_model, static_state)
                         # Compute the loss and gradients
-                        (loss, predictions), grads = loss_fn(
-                            model, images, labels, samples, rng)
+                        loss, grads = loss_fn(
+                            model, images, labels, samples, keys)
                         # Update the model using the optimizer
                         dynamic_state, _ = eqx.partition(model, eqx.is_array)
                         dynamic_state, opt_state = optimizer.update(
                             dynamic_state, grads, opt_state)
-                        return dynamic_state, opt_state, loss, predictions
+                        return dynamic_state, opt_state, loss
 
-                    @eqx.filter_jit
+                    @ eqx.filter_jit
                     def scan_fn(carry, data):
                         dynamic_state, opt_state = carry
-                        images, labels = data
+                        images, labels, key = data
                         # Train the model
-                        dynamic_state, opt_state, loss, predictions = train_fn(
-                            dynamic_state, opt_state, special_perm, rng1, optimizer, images, labels, train_samples)
-                        return (dynamic_state, opt_state), (loss, predictions)
+                        dynamic_state, opt_state, loss = train_fn(
+                            dynamic_state, opt_state, special_perm, key, optimizer, images, labels, train_samples)
+                        return (dynamic_state, opt_state), loss
+                    train_ck = jax.random.split(
+                        train_ck, task_train_images.shape[0])
                     # Use jax.lax.scan to iterate over the batches
-                    (dynamic_init_state, opt_state), (losses, predictions) = jax.lax.scan(
-                        f=scan_fn, init=(dynamic_init_state, opt_state), xs=(task_train_images, task_train_labels))
+                    (dynamic_init_state, opt_state), losses = jax.lax.scan(
+                        f=scan_fn, init=(dynamic_init_state, opt_state), xs=(task_train_images, task_train_labels, train_ck))
                     # Combine the dynamic and static parts of the model to recover the activation functions
                     model = eqx.combine(dynamic_init_state, static_state)
-                    accuracies = test_fn(
+                    accuracies, predictions = test_fn(
                         model=model,
-                        images=test_train_images,
-                        labels=test_train_labels,
-                        rng=rng2,
+                        images=task_test_images,
+                        labels=task_test_labels,
+                        rng=test_ck,
                         max_perm_parallel=configuration["max_perm_parallel"],
                         permutations=permutations,
                         test_samples=test_samples
@@ -185,8 +198,8 @@ if __name__ == "__main__":
                         tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
                                    9 and i != len(accuracies) - 1 else "\n")
                     # Save weights histogram
-                    histogramWeights(eqx.filter(
-                        model, eqx.is_array), WEIGHTS_PATH, task, epoch)
+                    # histogramWeights(eqx.filter(
+                    #     model, eqx.is_array), WEIGHTS_PATH, task, epoch)
                     # Save accuracy as jax array
                     with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
                         jnp.save(f, accuracies)

@@ -1,9 +1,7 @@
 import matplotlib.pyplot as plt
-import equinox as eqx
 from models import *
 from jax import jit
 import jax.numpy as jnp
-import jax
 
 
 def histogramWeights(model, path, task, epoch):
@@ -15,7 +13,6 @@ def histogramWeights(model, path, task, epoch):
         task: The task identifier for naming.
         epoch: The epoch number for naming.
     """
-    @jit
     def collect_weights(model):
         weights = []
         # Collect weights and biases from the model
@@ -35,7 +32,9 @@ def histogramWeights(model, path, task, epoch):
                     weights.append(layer.bias)
         return weights
 
-    weights = collect_weights(model)
+    # JIT compile the collect_weights function
+    collect_weights_jit = jit(collect_weights)
+    weights = collect_weights_jit(model)
 
     # Create subplots for each weight array
     fig, axes = plt.subplots(len(weights), 1, figsize=(5, 5*len(weights)))
