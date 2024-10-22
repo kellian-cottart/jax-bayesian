@@ -48,6 +48,7 @@ def mesu(
 
         def update_mesu(param, grad, prior):
             """ Update the parameters based on the gradients and the prior"""
+            # If clamp_grad > 0, then clamp gradients between -clamp_grad/sigma and clamp_grad/sigma
             if clamp_grad > 0:
                 grad = jax.tree_util.tree_map(
                     lambda x: jnp.clip(x, -clamp_grad / param.sigma, clamp_grad / param.sigma), grad)
@@ -58,10 +59,16 @@ def mesu(
                 (prior.sigma ** 2 - variance) / (N_sigma * (prior.sigma ** 2))
             mu_update = param.mu + lr_mu * \
                 (-variance * grad.mu + prior_attraction_mu)
-            sigma_update = param.sigma + lr_sigma * 0.5 * \
-                (-variance * grad.sigma + prior_attraction_sigma)
+            sigma_update = param.sigma - 0.5*lr_sigma * variance * \
+                grad.sigma + 0.5 * lr_sigma * prior_attraction_sigma
             return GaussianParameter(mu_update, sigma_update)
-        return jax.tree_util.tree_map(
-            update_mesu, params, gradients, state['prior'], is_leaf=discriminant), state
+        updates = jax.tree.map(
+            update_mesu,
+            params,
+            gradients,
+            state['prior'],
+            is_leaf=discriminant
+        )
+        return updates, state
 
     return optax.GradientTransformation(init, update)

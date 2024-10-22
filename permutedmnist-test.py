@@ -60,13 +60,13 @@ if __name__ == "__main__":
                 "clamp_grad": 0.1
             },
             "task": "PermutedMNIST",
-            "n_train_samples": 10,
-            "n_test_samples": 10,
-            "n_tasks": 100,
+            "n_train_samples": 8,
+            "n_test_samples": 8,
+            "n_tasks": 10,
             "epochs": 1,
             "train_batch_size": 1,
             "test_batch_size": 128,
-            "max_perm_parallel": 50,
+            "max_perm_parallel": 25,
             "seed": 0+i
         } for i in range(N_ITERATIONS)
     ]
@@ -112,7 +112,6 @@ if __name__ == "__main__":
                 test.data, test.targets, configuration["test_batch_size"])
             keys = jax.random.split(
                 rng, (configuration["n_tasks"], configuration["epochs"], 2))
-
             optimizer, opt_state = configure_optimizer(
                 configuration, eqx.filter(model, eqx.is_array))
             pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
@@ -185,6 +184,9 @@ if __name__ == "__main__":
                     for i, acc in enumerate(accuracies):
                         tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
                                    9 and i != len(accuracies) - 1 else "\n")
+                    # Save weights histogram
+                    histogramWeights(eqx.filter(
+                        model, eqx.is_array), WEIGHTS_PATH, task, epoch)
                     # Save accuracy as jax array
                     with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
                         jnp.save(f, accuracies)

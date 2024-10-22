@@ -56,8 +56,9 @@ class BayesianLinear(Module, strict=True):
             sigma=ones(wshape, dtype) * sigma_init,
         )
         self.bias = GaussianParameter(
-            mu=uniform(bkey, bshape, minval=-lim, maxval=lim),
-            sigma=ones(bshape, dtype) * sigma_init,
+            mu=uniform(bkey, bshape, minval=-lim,
+                       maxval=lim) if use_bias else None,
+            sigma=ones(bshape, dtype) * sigma_init if use_bias else None,
         )
         self.in_features = in_features
         self.out_features = out_features

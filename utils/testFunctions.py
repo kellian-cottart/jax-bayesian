@@ -52,7 +52,7 @@ def permute_and_test(model, permutations, image_batch, label_batch, max_perm_par
     return accuracies
 
 
-@ eqx.filter_jit
+@eqx.filter_jit
 def test_fn(model: eqx.Module,
             images: jnp.ndarray,
             labels: jnp.ndarray,
