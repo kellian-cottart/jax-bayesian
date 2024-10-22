@@ -13,58 +13,36 @@ import traceback
 from utils import *
 
 
-def prepare_data(data, targets, batch_size):
-    data = jnp.array(data, dtype=jnp.float32)
-    targets = jax.nn.one_hot(
-        jnp.array(targets, dtype=jnp.int32), num_classes=num_classes)
-    data, targets = data[:len(
-        data) - len(data) % batch_size], targets[:len(targets) - len(targets) % batch_size]
-    return data.reshape(-1, batch_size, *data.shape[1:]), targets.reshape(-1, batch_size, num_classes)
-
-
-def configure_networks(configuration, rng):
-
-    print("Configuring network with configuration: ",
-          configuration["network"])
-    # make a dictionary of maps
-    select_network = {
-        "bayesianmlp": SmallBayesianNetwork,
-        "mlp": SmallNetwork,
-    }
-    if not "network_params" in configuration:
-        raise ValueError("Network parameters not found")
-    try:
-        model = select_network[configuration["network"]](
-            key=rng, **configuration["network_params"])
-    except KeyError as e:
-        raise KeyError("Error with provided keys: ", e)
-
-    return model
-
-
-def configure_optimizer(configuration, model):
-    print("Configuring optimizer with configuration: ",
-          configuration["optimizer"])
-    select_optimizer = {
-        "sgd": sgd,
-        "mesu": mesu,
-    }
-    if not "optimizer_params" in configuration:
-        raise ValueError("Optimizer parameters not found")
-    try:
-        optimizer = select_optimizer[configuration["optimizer"]](
-            **configuration["optimizer_params"]
-        )
-    except KeyError as e:
-        raise KeyError("Error with provided keys: ", e)
-
-    opt_state = optimizer.init(model)
-    return optimizer, opt_state
-
-
 if __name__ == "__main__":
-    N_ITERATIONS = 1
+    N_ITERATIONS = 5
+    EXTRA = True
+    VERBOSE = False
     configurations = [
+        {
+            "network": "bayesianmlp",
+            "network_params": {
+                "sigma_init": 0.2,
+            },
+            "optimizer": "bgd",
+            "optimizer_params": {
+                "lr_mu": 1,
+                "lr_sigma": 1,
+                # "mu_prior": 0,
+                # "N_mu": 500_000,
+                # "N_sigma": 500_000,
+                "clamp_grad": 0.1
+            },
+            "task": "MNIST",
+            "n_train_samples": 10,
+            "n_test_samples": 10,
+            "n_tasks": 1,
+            "epochs": 1000,
+            "train_batch_size": 1,
+            "test_batch_size": 128,
+            "max_perm_parallel": 2,
+            "seed": 1000+i
+        } for i in range(N_ITERATIONS)
+    ] + [
         {
             "network": "bayesianmlp",
             "network_params": {
@@ -75,18 +53,18 @@ if __name__ == "__main__":
                 "lr_mu": 1,
                 "lr_sigma": 1,
                 "mu_prior": 0,
-                "N_mu": 200_000,
-                "N_sigma": 200_000,
-                "clamp_grad": 0
+                "N_mu": 500_000,
+                "N_sigma": 500_000,
+                "clamp_grad": 0.1
             },
-            "task": "PermutedMNIST",
-            "n_train_samples": 8,
-            "n_test_samples": 8,
-            "n_tasks": 10,
-            "epochs": 1,
+            "task": "MNIST",
+            "n_train_samples": 10,
+            "n_test_samples": 10,
+            "n_tasks": 1,
+            "epochs": 1000,
             "train_batch_size": 1,
-            "test_batch_size": 100,
-            "max_perm_parallel": 1,
+            "test_batch_size": 128,
+            "max_perm_parallel": 2,
             "seed": 1000+i
         } for i in range(N_ITERATIONS)
     ]
@@ -94,24 +72,26 @@ if __name__ == "__main__":
     for config in configurations:
         config = {k: v.lower() if isinstance(
             v, str) else v for k, v in config.items()}
-    # create a timestamp
-    TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S-")
     for k, configuration in enumerate(configurations):
+        # create a timestamp
+        TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S-")
         FOLDER = TIMESTAMP + \
             configuration["task"] + \
-            f"-t={configuration['n_tasks']}-e={configuration['epochs']}"
+            f"-t={configuration['n_tasks']}-e={configuration['epochs']}-opt={configuration['optimizer']}"
         MAIN_FOLDER = "results"
         SAVE_PATH = os.path.join(MAIN_FOLDER, FOLDER)
         CONFIGURATION_PATH = os.path.join(SAVE_PATH, f"config{k}")
         DATA_PATH = os.path.join(CONFIGURATION_PATH, "data")
         WEIGHTS_PATH = os.path.join(CONFIGURATION_PATH, "weights")
+        UNCERTAINTY_PATH = os.path.join(CONFIGURATION_PATH, "uncertainty")
         os.makedirs(MAIN_FOLDER, exist_ok=True)
         os.makedirs(CONFIGURATION_PATH, exist_ok=True)
         os.makedirs(SAVE_PATH, exist_ok=True)
         os.makedirs(DATA_PATH, exist_ok=True)
         os.makedirs(WEIGHTS_PATH, exist_ok=True)
+        os.makedirs(UNCERTAINTY_PATH, exist_ok=True)
         # save config
-        with open(SAVE_PATH + "/config.json", "w") as f:
+        with open(CONFIGURATION_PATH + "/config.json", "w") as f:
             json.dump(configuration, f, indent=4)
         try:
             # Load the MNIST dataset
@@ -121,32 +101,48 @@ if __name__ == "__main__":
             # Initialize the model
             rng = jax.random.PRNGKey(configuration["seed"])
             # Permutations
+            perm_keys, rng = jax.random.split(rng, 2)
+            perm_keys = jax.random.split(perm_keys, configuration["n_tasks"])
+            permutations = None
             if configuration["task"] == "PermutedMNIST":
                 permutations = jnp.array(
-                    [jax.random.permutation(key, jnp.array(shape).prod()) for key in jax.random.split(rng, configuration["n_tasks"])])
+                    [jax.random.permutation(key, jnp.array(shape).prod()) for key in perm_keys])
             model = configure_networks(configuration, rng)
             # Prepare datasets
             task_train_images, task_train_labels = prepare_data(
-                train.data, train.targets, configuration["train_batch_size"])
+                train.data, train.targets, configuration["train_batch_size"], num_classes)
             task_test_images, task_test_labels = prepare_data(
-                test.data, test.targets, configuration["test_batch_size"])
+                test.data, test.targets, configuration["test_batch_size"], num_classes)
             optimizer, opt_state = configure_optimizer(
                 configuration, eqx.filter(model, eqx.is_array))
-            pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
             train_samples = configuration["n_train_samples"] if "n_train_samples" in configuration else None
             test_samples = configuration["n_test_samples"] if "n_test_samples" in configuration else None
+            if EXTRA == True:
+                ood_key, rng = jax.random.split(rng)
+                ood_test_images, ood_test_labels = prepare_data(
+                    test.data, test.targets, configuration["test_batch_size"], num_classes)
+                ood_permutation = jnp.array([jax.random.permutation(
+                    ood_key, jnp.array(shape).prod())])
 
             # GENERATING A HUGE ARRAY OF KEYS, ASSURING THAT THE KEYS ARE UNIQUE
+            trkey, tekey, ookey, rng = jax.random.split(rng, 4)
             training_core_keys = jax.random.split(
-                rng, (configuration["n_tasks"], configuration["epochs"]))
+                trkey, (configuration["n_tasks"], configuration["epochs"]))
             testing_core_keys = jax.random.split(
-                rng, (configuration["n_tasks"], configuration["epochs"]))
-            for task in pbar:
+                tekey, (configuration["n_tasks"], configuration["epochs"]))
+            ood_core_keys = jax.random.split(
+                ookey, (configuration["n_tasks"], configuration["epochs"]))
+            if VERBOSE:
+                pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
+            else:
+                pbar = range(configuration["n_tasks"])
+            for i, task in enumerate(pbar):
                 for epoch in range(configuration["epochs"]):
                     train_ck = training_core_keys[task, epoch]
                     test_ck = testing_core_keys[task, epoch]
-                    pbar.set_description(
-                        f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
+                    if VERBOSE:
+                        pbar.set_description(
+                            f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
                     special_perm = permutations[task] if configuration["task"] == "PermutedMNIST" else None
                     # Split the model into dynamic and static parts
                     dynamic_init_state, static_state = eqx.partition(
@@ -193,16 +189,43 @@ if __name__ == "__main__":
                         permutations=permutations,
                         test_samples=test_samples
                     )
-                    tqdm.write("=" * 20)
-                    for i, acc in enumerate(accuracies):
-                        tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
-                                   9 and i != len(accuracies) - 1 else "\n")
-                    # Save weights histogram
-                    # histogramWeights(eqx.filter(
-                    #     model, eqx.is_array), WEIGHTS_PATH, task, epoch)
-                    # Save accuracy as jax array
-                    with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
-                        jnp.save(f, accuracies)
+                    if VERBOSE:
+                        tqdm.write("=" * 20)
+                        for i, acc in enumerate(accuracies):
+                            tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
+                                       9 and i != len(accuracies) - 1 else "\n")
+                    if EXTRA == True:
+                        # Save weights histogram
+                        histogramWeights(eqx.filter(
+                            model, eqx.is_array), WEIGHTS_PATH, task, epoch)
+                        # Compute uncertainty
+                        ood_k = ood_core_keys[task, epoch]
+                        ood_accuracies, ood_predictions = test_fn(
+                            model=model,
+                            images=ood_test_images,
+                            labels=ood_test_labels,
+                            rng=ood_k,
+                            max_perm_parallel=configuration["max_perm_parallel"],
+                            permutations=ood_permutation,
+                            test_samples=test_samples
+                        )
+                        aleatoric_uncertainty, epistemic_uncertainty, aleatoric_uncertainty_ood, epistemic_uncertainty_ood, auc = computeUncertainty(
+                            predictions=jnp.expand_dims(
+                                predictions[i], axis=0),
+                            ood_predictions=ood_predictions
+                        )
+                        with open(os.path.join(UNCERTAINTY_PATH, f"aleatoric-task{task}-epoch{epoch}.npy"), "wb") as f:
+                            jnp.save(f, aleatoric_uncertainty)
+                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-aleatoric-task{task}-epoch{epoch}.npy"), "wb") as f:
+                            jnp.save(f, aleatoric_uncertainty_ood)
+                        with open(os.path.join(UNCERTAINTY_PATH, f"epistemic-task{task}-epoch{epoch}.npy"), "wb") as f:
+                            jnp.save(f, epistemic_uncertainty)
+                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-epistemic-task{task}-epoch{epoch}.npy"), "wb") as f:
+                            jnp.save(f, epistemic_uncertainty_ood)
+                        with open(os.path.join(UNCERTAINTY_PATH, f"roc-auc-task{task}-epoch{epoch}.npy"), "wb") as f:
+                            jnp.save(f, auc)
+                        with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
+                            jnp.save(f, accuracies)
         except (KeyboardInterrupt, SystemExit, Exception):
             print(traceback.format_exc())
             rmtree(SAVE_PATH)

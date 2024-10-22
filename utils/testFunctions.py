@@ -7,7 +7,7 @@ import equinox as eqx
 def test_fn_bayesian(model, images, samples, rng):
     rng = jax.random.split(rng, images.shape[0])
     return jax.vmap(model, in_axes=(0, None, 0))(
-        images, samples, rng).mean(axis=1)
+        images, samples, rng)
 
 
 @ eqx.filter_jit
@@ -19,9 +19,11 @@ def test_fn_deterministic(model, images):
 def compute_accuracy(model, images, labels, samples=None, rng=None):
     if samples is not None:
         predictions = test_fn_bayesian(model, images, samples, rng)
+        output = jax.nn.log_softmax(predictions, axis=-1).mean(axis=1)
     else:
         predictions = test_fn_deterministic(model, images)
-    return (predictions.argmax(axis=-1) == labels.argmax(axis=-1)).mean(), predictions
+        output = jax.nn.log_softmax(predictions, axis=-1)
+    return (output.argmax(axis=-1) == labels.argmax(axis=-1)).mean(), predictions
 
 
 @ eqx.filter_jit
@@ -31,7 +33,7 @@ def permute_and_test(model, permutations, image_batch, label_batch, max_perm_par
     """
     # max perm should be the max operation to parallelize, hence the data must be split into max_perm_parallel chunks
     batched_permutations = permutations.reshape(
-        max_perm_parallel, permutations.shape[0] // max_perm_parallel, *permutations.shape[1:])
+        max_perm_parallel, permutations.shape[0] // max_perm_parallel, *permutations.shape[1:]) if len(permutations) > max_perm_parallel else jnp.array([permutations])
 
     def test_batch_permutation_fn(model, image_batch, label_batch, batched_permutations, samples=None, rng=None):
         def compute_perm_accuracy(carry, data):
@@ -51,6 +53,7 @@ def permute_and_test(model, permutations, image_batch, label_batch, max_perm_par
         model, image_batch, label_batch, batched_permutations, samples, rng)
     # Flatten the results in the first two dimensions
     accuracies = accuracies.reshape(-1)
+    predictions = predictions.reshape(-1, *predictions.shape[2:])
     return accuracies, predictions
 
 
@@ -68,6 +71,10 @@ def test_fn(model: eqx.Module,
             model, permutations, images, labels, max_perm_parallel, test_samples, rng)
         accuracies = accuracies.mean(axis=0)
     else:
-        accuracies, predictions = jnp.array([jax.vmap(compute_accuracy, in_axes=(
-            None, 0, 0, None, None))(model, images, labels, test_samples, rng).mean()])
+        accuracies, predictions = jax.vmap(compute_accuracy, in_axes=(
+            None, 0, 0, None, None))(model, images, labels, test_samples, rng)
+        accuracies = jnp.expand_dims(accuracies.mean(), 0)
+        predictions = jnp.expand_dims(predictions, 0)
+    predictions = predictions.reshape(
+        predictions.shape[1], predictions.shape[0]*predictions.shape[2], *predictions.shape[3:])
     return accuracies, predictions
