@@ -1,6 +1,12 @@
 import optax
 import jax.numpy as jnp
 import jax
+from models.gaussianParameter import *
+
+
+def discriminant(param):
+    """ Discriminate between Bayesian parameters"""
+    return hasattr(param, 'mu') and hasattr(param, 'sigma') and param.mu is not None and param.sigma is not None
 
 
 def mesu(
@@ -27,16 +33,10 @@ def mesu(
 
     def init(params):
         # Check if all parameters are bayesian i.e that the path name contains mu or sigma
-        def check_bayesian(path, param):
-            if len(path) != 3:
-                raise ValueError("The network doesn't have 2 parameters.")
-            if not ("mu" in path[2].name or "sigma" in path[2].name):
-                raise ValueError(
-                    "All parameters should be Bayesian, i.e contain mu or sigma in their parameters.")
-            else:
-                return param
-
-        prior = jax.tree_util.tree_map_with_path(check_bayesian, params)
+        def prior_compute(param):
+            return GaussianParameter(jnp.ones_like(param.mu) * mu_prior, param.sigma)
+        prior = jax.tree_util.tree_map(
+            prior_compute, params, is_leaf=discriminant)
         return {
             'step': 0,
             'prior': prior,
@@ -50,7 +50,7 @@ def mesu(
             """ Update the parameters based on the gradients and the prior"""
             if clamp_grad > 0:
                 grad = jax.tree_util.tree_map(
-                    lambda x: jnp.clip(x, -clamp_grad/param.sigma, clamp_grad/param.sigma), grad)
+                    lambda x: jnp.clip(x, -clamp_grad / param.sigma, clamp_grad / param.sigma), grad)
             variance = param.sigma ** 2
             prior_attraction_mu = variance * \
                 (mu_prior - param.mu) / (N_mu * (prior.sigma ** 2))
@@ -58,24 +58,10 @@ def mesu(
                 (prior.sigma ** 2 - variance) / (N_sigma * (prior.sigma ** 2))
             mu_update = param.mu + lr_mu * \
                 (-variance * grad.mu + prior_attraction_mu)
-            sigma_update = param.sigma + lr_sigma*0.5 * \
-                (- variance * grad.sigma + prior_attraction_sigma)
-
-            def update_param(path, param):
-                """ Update the parameters based on the path by iterating the tree
-                """
-                if path[-1].name == 'mu':
-                    return mu_update
-                elif path[-1].name == 'sigma':
-                    return sigma_update
-            return jax.tree_util.tree_map_with_path(update_param, param)
-
-        def discriminant(param):
-            """ Discriminate between Bayesian parameters"""
-            return hasattr(param, 'mu') and hasattr(param, 'sigma') and param.mu is not None and param.sigma is not None
-
-        updates = jax.tree.map(update_mesu, params,
-                               gradients, state['prior'], is_leaf=discriminant)
-        return updates, state
+            sigma_update = param.sigma + lr_sigma * 0.5 * \
+                (-variance * grad.sigma + prior_attraction_sigma)
+            return GaussianParameter(mu_update, sigma_update)
+        return jax.tree_util.tree_map(
+            update_mesu, params, gradients, state['prior'], is_leaf=discriminant), state
 
     return optax.GradientTransformation(init, update)

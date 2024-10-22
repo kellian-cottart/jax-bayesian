@@ -19,8 +19,10 @@ def sgd(lr: float = 0.001,):
     def update(params, gradient, state):
         state['step'] += 1
         # Update the parameters using sgd
-        updates = jax.tree_util.tree_map(
-            lambda param, grad: param - lr * grad if grad is not None else param, params, gradient)
+
+        def udpate_sgd(param, grad):
+            return param - lr * grad if grad is not None else param
+        updates = jax.tree_util.tree_map(udpate_sgd, params, gradient)
         return updates, state
 
     return optax.GradientTransformation(init, update)

@@ -2,20 +2,11 @@ from equinox import Module, field
 from equinox import _misc
 from jax.random import split, normal, uniform
 from jax.nn import relu
-from jax.numpy import shape, broadcast_to, einsum, dot, expand_dims,  reshape, ones
+from jax.numpy import shape, broadcast_to, einsum, dot, expand_dims,  reshape, ones, ravel
 from typing import Literal, Union
 from jaxtyping import PRNGKeyArray, Array
 from math import sqrt
-import jax
-
-
-class GaussianParameter(Module):
-    mu: Array
-    sigma: Array
-
-    def __init__(self, mu: Array, sigma: Array):
-        self.mu = mu
-        self.sigma = sigma
+from models.gaussianParameter import *
 
 
 class BayesianLinear(Module, strict=True):
@@ -104,19 +95,22 @@ class BayesianLinear(Module, strict=True):
 
 
 class SmallBayesianNetwork(Module):
-    linear1: BayesianLinear
-    linear2: BayesianLinear
+    layers: list[BayesianLinear]
 
     def __init__(self, key, sigma_init):
         key1, key2 = split(key)
-        self.linear1 = BayesianLinear(
-            784, 50, use_bias=False, key=key1, sigma_init=sigma_init)
-        self.linear2 = BayesianLinear(
-            50, 10, use_bias=False, key=key2, sigma_init=sigma_init)
+        self.layers = [ravel,
+                       BayesianLinear(
+                           784, 50, use_bias=False, key=key1, sigma_init=sigma_init),
+                       relu,
+                       BayesianLinear(
+                           50, 10, use_bias=False, key=key2, sigma_init=sigma_init)]
 
     def __call__(self, x, samples, key):
-        key1, key2 = split(key)
-        x = reshape(x, (-1))
-        x = relu(self.linear1(x, samples=samples, key=key1))
-        x = self.linear2(x, samples=samples, key=key2)
+        keys = split(key, len(self.layers))
+        for i, layer in enumerate(self.layers):
+            if isinstance(layer, BayesianLinear):
+                x = layer(x, samples=samples, key=keys[i])
+            else:   # activation function
+                x = layer(x)
         return x if samples != 0 else expand_dims(x, 0)
