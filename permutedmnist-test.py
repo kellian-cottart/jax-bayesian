@@ -81,7 +81,7 @@ if __name__ == "__main__":
         MAIN_FOLDER = "results"
         SAVE_PATH = os.path.join(MAIN_FOLDER, FOLDER)
         CONFIGURATION_PATH = os.path.join(SAVE_PATH, f"config{k}")
-        DATA_PATH = os.path.join(CONFIGURATION_PATH, "data")
+        DATA_PATH = os.path.join(CONFIGURATION_PATH, "accuracy")
         WEIGHTS_PATH = os.path.join(CONFIGURATION_PATH, "weights")
         UNCERTAINTY_PATH = os.path.join(CONFIGURATION_PATH, "uncertainty")
         os.makedirs(MAIN_FOLDER, exist_ok=True)
@@ -214,17 +214,17 @@ if __name__ == "__main__":
                                 predictions[i], axis=0),
                             ood_predictions=ood_predictions
                         )
-                        with open(os.path.join(UNCERTAINTY_PATH, f"aleatoric-task{task}-epoch{epoch}.npy"), "wb") as f:
+                        with open(os.path.join(UNCERTAINTY_PATH, f"aleatoric-task={task}-epoch={epoch}.npy"), "wb") as f:
                             jnp.save(f, aleatoric_uncertainty)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-aleatoric-task{task}-epoch{epoch}.npy"), "wb") as f:
+                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-aleatoric-task={task}-epoch={epoch}.npy"), "wb") as f:
                             jnp.save(f, aleatoric_uncertainty_ood)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"epistemic-task{task}-epoch{epoch}.npy"), "wb") as f:
+                        with open(os.path.join(UNCERTAINTY_PATH, f"epistemic-task={task}-epoch={epoch}.npy"), "wb") as f:
                             jnp.save(f, epistemic_uncertainty)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-epistemic-task{task}-epoch{epoch}.npy"), "wb") as f:
+                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-epistemic-task={task}-epoch={epoch}.npy"), "wb") as f:
                             jnp.save(f, epistemic_uncertainty_ood)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"roc-auc-task{task}-epoch{epoch}.npy"), "wb") as f:
+                        with open(os.path.join(UNCERTAINTY_PATH, f"roc-auc-task={task}-epoch={epoch}.npy"), "wb") as f:
                             jnp.save(f, auc)
-                        with open(os.path.join(DATA_PATH, f"task{task}-epoch{epoch}.npy"), "wb") as f:
+                        with open(os.path.join(DATA_PATH, f"task={task}-epoch={epoch}.npy"), "wb") as f:
                             jnp.save(f, accuracies)
         except (KeyboardInterrupt, SystemExit, Exception):
             print(traceback.format_exc())

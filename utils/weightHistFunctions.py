@@ -38,7 +38,6 @@ def histogramWeights(model, path, task, epoch):
 
     # Create subplots for each weight array
     fig, axes = plt.subplots(len(weights), 1, figsize=(5, 5*len(weights)))
-
     for i, weight in enumerate(weights):
         flattened = weight.flatten()
         max_abs_value = jnp.max(jnp.abs(flattened))
@@ -58,9 +57,39 @@ def histogramWeights(model, path, task, epoch):
         axes[i].set_xlim(-max_abs_value, max_abs_value)
         # Set ylim
         axes[i].set_ylim(0, 50)
+        # save the counts
+        name = None
+        if "Bayesian" in model.__class__.__name__:
+            if i % 2 == 0:
+                name = f"{path}/counts-sigma-task={task}-epoch={epoch}.npy"
+            else:
+                name = f"{path}/counts-mu-task={task}-epoch={epoch}.npy"
+        else:
+            name = f"{path}/counts-task = {task}-epoch = {epoch}.npy"
+
+        with open(name, 'wb') as f:
+            jnp.save(f, counts)
+
+    # Save the mean and the std of the weights for each layer
+    for i, weight in enumerate(weights):
+        flattened = weight.flatten()
+        mean = jnp.mean(jnp.abs(flattened))
+        std = jnp.std(jnp.abs(flattened))
+        save = jnp.array([mean, std])
+        name = None
+        if "Bayesian" in model.__class__.__name__:
+            if i % 2 == 0:
+                name = f"{path}/param-sigma-task={task}-epoch={epoch}.npy"
+            else:
+                name = f"{path}/param-mu-task={task}-epoch={epoch}.npy"
+        else:
+            name = f"{path}/param-task = {task}-epoch = {epoch}.npy"
+
+        with open(name, 'wb') as f:
+            jnp.save(f, save)
 
     # Adjust layout and save the figure
     plt.tight_layout()
-    fig.savefig(f"{path}/weights-task{task}-epoch{epoch}.pdf",
+    fig.savefig(f"{path}/weights-task={task}-epoch={epoch}.pdf",
                 format='pdf')
     plt.close(fig)
