@@ -7,7 +7,6 @@ from models import *
 from datetime import datetime
 import os
 import json
-import functools as ft
 from shutil import rmtree
 from optimizers import *
 import traceback
@@ -61,13 +60,13 @@ if __name__ == "__main__":
                 "clamp_grad": 0.1
             },
             "task": "PermutedMNIST",
-            "n_train_samples": 8,
-            "n_test_samples": 8,
+            "n_train_samples": 10,
+            "n_test_samples": 10,
             "n_tasks": 100,
             "epochs": 1,
             "train_batch_size": 1,
             "test_batch_size": 128,
-            "max_perm_parallel": 25,
+            "max_perm_parallel": 50,
             "seed": 0+i
         } for i in range(N_ITERATIONS)
     ]
@@ -132,23 +131,29 @@ if __name__ == "__main__":
 
                     @eqx.filter_jit
                     def train_fn(dynamic_model, opt_state, perm, rng, optimizer, images, labels, samples=None):
-                        """ Training function for models. Receives one batch of data and updates the model by computing the
+                        """Training function for models. Receives one batch of data and updates the model by computing the
                         loss and its gradients.
 
                         Args:
-                            carry: tuple containing the model, optimizer state, permutation and random key
-                            data: tuple containing the images and labels
-                            samples: number of samples for the model. If None, no sampling is performed.
+                            dynamic_model: The dynamic part of the model.
+                            opt_state: The state of the optimizer.
+                            perm: Permutation to apply to the images.
+                            rng: Random key for JAX operations.
+                            optimizer: The optimizer to use for updating the model.
+                            images: Batch of images.
+                            labels: Batch of labels.
+                            samples: Number of samples for the model. If None, no sampling is performed.
                         """
-                        # Compute the loss
+                        # Apply permutation if provided
                         if perm is not None:
                             images = images.reshape(
                                 images.shape[0], -1)[:, perm].reshape(images.shape)
+                        # Combine dynamic and static parts of the model
                         model = eqx.combine(dynamic_model, static_state)
-
+                        # Compute the loss and gradients
                         (loss, predictions), grads = loss_fn(
                             model, images, labels, samples, rng)
-                        # Update
+                        # Update the model using the optimizer
                         dynamic_state, _ = eqx.partition(model, eqx.is_array)
                         dynamic_state, opt_state = optimizer.update(
                             dynamic_state, grads, opt_state)
@@ -158,22 +163,24 @@ if __name__ == "__main__":
                     def scan_fn(carry, data):
                         dynamic_state, opt_state = carry
                         images, labels = data
+                        # Train the model
                         dynamic_state, opt_state, loss, predictions = train_fn(
                             dynamic_state, opt_state, special_perm, rng1, optimizer, images, labels, train_samples)
                         return (dynamic_state, opt_state), (loss, predictions)
-
+                    # Use jax.lax.scan to iterate over the batches
                     (dynamic_init_state, opt_state), (losses, predictions) = jax.lax.scan(
                         f=scan_fn, init=(dynamic_init_state, opt_state), xs=(task_train_images, task_train_labels))
+                    # Combine the dynamic and static parts of the model to recover the activation functions
                     model = eqx.combine(dynamic_init_state, static_state)
-
-                    # Test the model and compute accuracy
-                    if configuration["task"] == "PermutedMNIST":
-                        accuracies = jnp.zeros(configuration["n_tasks"])
-                        accuracies = jax.vmap(permute_and_test, in_axes=(None, None, 0, 0, None, None, None))(
-                            model, permutations, test_train_images, test_train_labels, configuration["max_perm_parallel"], test_samples, rng2).mean(axis=0)
-                    else:
-                        accuracies = jnp.array([jax.vmap(compute_accuracy, in_axes=(None, 0, 0, None, None))(
-                            model, test_train_images, test_train_labels, test_samples, rng2).mean()])
+                    accuracies = test_fn(
+                        model=model,
+                        images=test_train_images,
+                        labels=test_train_labels,
+                        rng=rng2,
+                        max_perm_parallel=configuration["max_perm_parallel"],
+                        permutations=permutations,
+                        test_samples=test_samples
+                    )
                     tqdm.write("=" * 20)
                     for i, acc in enumerate(accuracies):
                         tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
