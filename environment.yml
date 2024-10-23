@@ -1,0 +1,17 @@
+name: binarized
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.9.18
+  - nvidia::cudatoolkit
+  - pytorch-cuda=12.1
+  - matplotlib
+  - torchvision=0.18.0=py39_cu121
+  - pip
+  - pip:
+      - idx2numpy
+      - tqdm
+      - jax[cuda12]
+      - equinox
