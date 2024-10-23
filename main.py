@@ -70,7 +70,7 @@ if __name__ == "__main__":
             perm_keys, rng = jax.random.split(rng, 2)
             perm_keys = jax.random.split(perm_keys, configuration["n_tasks"])
             permutations = None
-            if configuration["task"] == "PermutedMNIST":
+            if configuration["task"] == "permutedmnist":
                 permutations = jnp.array(
                     [jax.random.permutation(key, jnp.array(shape).prod()) for key in perm_keys])
             model = configure_networks(configuration, rng)
@@ -109,7 +109,7 @@ if __name__ == "__main__":
                     if VERBOSE:
                         pbar.set_description(
                             f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
-                    special_perm = permutations[task] if configuration["task"] == "PermutedMNIST" else None
+                    special_perm = permutations[task] if permutations is not None else None
                     # Split the model into dynamic and static parts
                     dynamic_init_state, static_state = eqx.partition(
                         model, eqx.is_array)
