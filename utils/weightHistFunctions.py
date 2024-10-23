@@ -60,12 +60,14 @@ def histogramWeights(model, path, task, epoch):
         # save the counts
         name = None
         if "Bayesian" in model.__class__.__name__:
+            layer = i // 2
             if i % 2 == 0:
-                name = f"{path}/counts-sigma-task={task}-epoch={epoch}.npy"
+                name = f"{path}/counts-sigma-l={layer}-task={task}-epoch={epoch}.npy"
             else:
-                name = f"{path}/counts-mu-task={task}-epoch={epoch}.npy"
+                name = f"{path}/counts-mu-l={layer}-task={task}-epoch={epoch}.npy"
         else:
-            name = f"{path}/counts-task = {task}-epoch = {epoch}.npy"
+            layer = i
+            name = f"{path}/counts-l={layer}-task={task}-epoch = {epoch}.npy"
 
         with open(name, 'wb') as f:
             jnp.save(f, counts)
@@ -78,12 +80,14 @@ def histogramWeights(model, path, task, epoch):
         save = jnp.array([mean, std])
         name = None
         if "Bayesian" in model.__class__.__name__:
+            layer = i // 2
             if i % 2 == 0:
-                name = f"{path}/param-sigma-task={task}-epoch={epoch}.npy"
+                name = f"{path}/param-sigma-l={layer}-task={task}-epoch={epoch}.npy"
             else:
-                name = f"{path}/param-mu-task={task}-epoch={epoch}.npy"
+                name = f"{path}/param-mu-l={layer}-task={task}-epoch={epoch}.npy"
         else:
-            name = f"{path}/param-task = {task}-epoch = {epoch}.npy"
+            layer = i
+            name = f"{path}/param-l={layer}-task={task}-epoch = {epoch}.npy"
 
         with open(name, 'wb') as f:
             jnp.save(f, save)

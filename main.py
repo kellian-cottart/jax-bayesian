@@ -11,70 +11,43 @@ from shutil import rmtree
 from optimizers import *
 import traceback
 from utils import *
+import argparse
+import json
 
+# argparse allows to load a configuration from a file
+CONFIGURATION_LOADING_FOLDER = "configurations"
+
+# first argument is name of config file
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", help="Configuration file name",
+                    type=str)
+parser.add_argument(
+    "--n_iterations", help="Number of iterations to run the config file for", type=int, default=1)
+parser.add_argument(
+    "--extra", help="Whether to run the extra part of the code(graphs, uncertainty)", action="store_true")
+parser.add_argument(
+    "-v", "--verbose", help="Whether to display the pbar or not", action="store_true")
+
+args = parser.parse_args()
+CONFIG_FILE = json.load(
+    open(os.path.join(CONFIGURATION_LOADING_FOLDER, args.config)))
+N_ITERATIONS = args.n_iterations
+EXTRA = args.extra
+VERBOSE = args.verbose
 
 if __name__ == "__main__":
-    N_ITERATIONS = 5
-    EXTRA = True
-    VERBOSE = False
-    configurations = [
-        {
-            "network": "bayesianmlp",
-            "network_params": {
-                "sigma_init": 0.2,
-            },
-            "optimizer": "bgd",
-            "optimizer_params": {
-                "lr_mu": 1,
-                "lr_sigma": 1,
-                # "mu_prior": 0,
-                # "N_mu": 500_000,
-                # "N_sigma": 500_000,
-                "clamp_grad": 0.1
-            },
-            "task": "MNIST",
-            "n_train_samples": 10,
-            "n_test_samples": 10,
-            "n_tasks": 1,
-            "epochs": 1000,
-            "train_batch_size": 1,
-            "test_batch_size": 128,
-            "max_perm_parallel": 2,
-            "seed": 1000+i
-        } for i in range(N_ITERATIONS)
-    ] + [
-        {
-            "network": "bayesianmlp",
-            "network_params": {
-                "sigma_init": 0.2,
-            },
-            "optimizer": "mesu",
-            "optimizer_params": {
-                "lr_mu": 1,
-                "lr_sigma": 1,
-                "mu_prior": 0,
-                "N_mu": 500_000,
-                "N_sigma": 500_000,
-                "clamp_grad": 0.1
-            },
-            "task": "MNIST",
-            "n_train_samples": 10,
-            "n_test_samples": 10,
-            "n_tasks": 1,
-            "epochs": 1000,
-            "train_batch_size": 1,
-            "test_batch_size": 128,
-            "max_perm_parallel": 2,
-            "seed": 1000+i
-        } for i in range(N_ITERATIONS)
-    ]
-    # convert all fields to lowercase if string
+
+    # Configurations is an array with N_ITERATIONS times the same config except with seed +=1
+    configurations = [CONFIG_FILE.copy() for _ in range(N_ITERATIONS)]
+    for k, configuration in enumerate(configurations):
+        configuration["seed"] += k
+    # Convert all fields to lowercase if string
     for config in configurations:
         config = {k: v.lower() if isinstance(
             v, str) else v for k, v in config.items()}
+    # Create a timestamp
+    TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S-")
     for k, configuration in enumerate(configurations):
-        # create a timestamp
-        TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S-")
         FOLDER = TIMESTAMP + \
             configuration["task"] + \
             f"-t={configuration['n_tasks']}-e={configuration['epochs']}-opt={configuration['optimizer']}"
