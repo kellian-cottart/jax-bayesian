@@ -13,5 +13,7 @@ dependencies:
   - pip:
       - idx2numpy
       - tqdm
+      - jaxlib
       - jax[cuda12]
       - equinox
+      - optax
