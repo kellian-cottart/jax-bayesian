@@ -16,7 +16,6 @@ import json
 
 # argparse allows to load a configuration from a file
 CONFIGURATION_LOADING_FOLDER = "configurations"
-
 # first argument is name of config file
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", help="Configuration file name",
@@ -27,7 +26,6 @@ parser.add_argument(
     "--extra", help="Whether to run the extra part of the code(graphs, uncertainty)", action="store_true")
 parser.add_argument(
     "-v", "--verbose", help="Whether to display the pbar or not", action="store_true")
-
 args = parser.parse_args()
 CONFIG_FILE = json.load(
     open(os.path.join(CONFIGURATION_LOADING_FOLDER, args.config)))
@@ -38,31 +36,26 @@ VERBOSE = args.verbose
 if __name__ == "__main__":
 
     # Configurations is an array with N_ITERATIONS times the same config except with seed +=1
-    configurations = [CONFIG_FILE.copy() for _ in range(N_ITERATIONS)]
-    for k, configuration in enumerate(configurations):
-        configuration["seed"] += k
+    configurations = [{**CONFIG_FILE, "seed": CONFIG_FILE["seed"] + k}
+                      for k in range(N_ITERATIONS)]
     # Convert all fields to lowercase if string
     for config in configurations:
-        config = {k: v.lower() if isinstance(
-            v, str) else v for k, v in config.items()}
+        for k, v in config.items():
+            if isinstance(v, str):
+                config[k] = v.lower()
     # Create a timestamp
     TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S-")
+    MAIN_FOLDER = "results"
+    os.makedirs(MAIN_FOLDER, exist_ok=True)
     for k, configuration in enumerate(configurations):
-        FOLDER = TIMESTAMP + \
-            configuration["task"] + \
-            f"-t={configuration['n_tasks']}-e={configuration['epochs']}-opt={configuration['optimizer']}"
-        MAIN_FOLDER = "results"
+        FOLDER = f"{TIMESTAMP}{configuration['task']}-t={configuration['n_tasks']}-e={configuration['epochs']}-opt={configuration['optimizer']}"
         SAVE_PATH = os.path.join(MAIN_FOLDER, FOLDER)
         CONFIGURATION_PATH = os.path.join(SAVE_PATH, f"config{k}")
         DATA_PATH = os.path.join(CONFIGURATION_PATH, "accuracy")
         WEIGHTS_PATH = os.path.join(CONFIGURATION_PATH, "weights")
         UNCERTAINTY_PATH = os.path.join(CONFIGURATION_PATH, "uncertainty")
-        os.makedirs(MAIN_FOLDER, exist_ok=True)
-        os.makedirs(CONFIGURATION_PATH, exist_ok=True)
-        os.makedirs(SAVE_PATH, exist_ok=True)
-        os.makedirs(DATA_PATH, exist_ok=True)
-        os.makedirs(WEIGHTS_PATH, exist_ok=True)
-        os.makedirs(UNCERTAINTY_PATH, exist_ok=True)
+        for path in [SAVE_PATH, CONFIGURATION_PATH, DATA_PATH, WEIGHTS_PATH, UNCERTAINTY_PATH]:
+            os.makedirs(path, exist_ok=True)
         # save config
         with open(CONFIGURATION_PATH + "/config.json", "w") as f:
             json.dump(configuration, f, indent=4)
