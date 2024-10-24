@@ -7,8 +7,8 @@
     "lr_sigma": 1,
     "mu_prior": 0,
     "sigma_prior": 0.2,
-    "N_mu": 600000,
-    "N_sigma": 600000,
+    "N_mu": 300000,
+    "N_sigma": 300000,
     "clamp_grad": 0
   },
   "task": "MNIST",
