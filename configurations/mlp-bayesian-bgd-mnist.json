@@ -16,6 +16,6 @@
   "epochs": 1000,
   "train_batch_size": 1,
   "test_batch_size": 128,
-  "max_perm_parallel": 2,
+  "max_perm_parallel": 1,
   "seed": 1000
 }
