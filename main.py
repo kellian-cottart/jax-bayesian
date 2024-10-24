@@ -110,41 +110,16 @@ if __name__ == "__main__":
                     test_ck = testing_core_keys[task, epoch]
                     special_perm = permutations[task] if permutations is not None else None
                     # Split the model into dynamic and static parts
-                    dynamic_init_state, static_state = eqx.partition(
-                        model, eqx.is_array)
-
-                    @ eqx.filter_jit
-                    def train_fn(dynamic_model, opt_state, perm, keys, optimizer, images, labels, samples=None):
-                        # Apply permutation if provided
-                        if perm is not None:
-                            images = images.reshape(
-                                images.shape[0], -1)[:, perm].reshape(images.shape)
-                        # Combine dynamic and static parts of the model
-                        model = eqx.combine(dynamic_model, static_state)
-                        # Compute the loss and gradients
-                        loss, grads = loss_fn(
-                            model, images, labels, samples, keys)
-                        # Update the model using the optimizer
-                        dynamic_state, _ = eqx.partition(model, eqx.is_array)
-                        dynamic_state, opt_state = optimizer.update(
-                            dynamic_state, grads, opt_state)
-                        return dynamic_state, opt_state, loss
-
-                    @ eqx.filter_jit
-                    def scan_fn(carry, data):
-                        dynamic_state, opt_state = carry
-                        images, labels, key = data
-                        # Train the model
-                        dynamic_state, opt_state, loss = train_fn(
-                            dynamic_state, opt_state, special_perm, key, optimizer, images, labels, train_samples)
-                        return (dynamic_state, opt_state), loss
-                    train_ck = jax.random.split(
-                        train_ck, task_train_images.shape[0])
-                    # Use jax.lax.scan to iterate over the batches
-                    (dynamic_init_state, opt_state), losses = jax.lax.scan(
-                        f=scan_fn, init=(dynamic_init_state, opt_state), xs=(task_train_images, task_train_labels, train_ck))
-                    # Combine the dynamic and static parts of the model to recover the activation functions
-                    model = eqx.combine(dynamic_init_state, static_state)
+                    model, opt_state, losses = train_fn(
+                        model=model,
+                        task_train_images=task_train_images,
+                        task_train_labels=task_train_labels,
+                        opt_state=opt_state,
+                        optimizer=optimizer,
+                        train_ck=train_ck,
+                        special_perm=special_perm,
+                        train_samples=train_samples
+                    )
                     accuracies, predictions = test_fn(
                         model=model,
                         images=task_test_images,
