@@ -7,7 +7,6 @@ from typing import Literal, Union
 from jaxtyping import PRNGKeyArray, Array
 from math import sqrt
 from models.gaussianParameter import *
-import jax
 
 
 class BayesianLinear(Module, strict=True):
@@ -27,7 +26,6 @@ class BayesianLinear(Module, strict=True):
         dtype=None,
         *,
         key: PRNGKeyArray,
-        sigma_init: float = 0.1,
     ):
         """ Initialises the Bayesian Linear Layer
 
@@ -47,19 +45,19 @@ class BayesianLinear(Module, strict=True):
         wkey, bkey = split(key, 2)
         in_features_ = 1 if in_features == "scalar" else in_features
         out_features_ = 1 if out_features == "scalar" else out_features
-        lim = 2 / sqrt(in_features_)
+        lim = 4 / sqrt(in_features_)
         wshape = (out_features_, in_features_)
         bshape = (out_features_,)
 
         # Replace the placeholder with the following code
         self.weight = GaussianParameter(
             mu=uniform(wkey, wshape, minval=-lim, maxval=lim),
-            sigma=ones(wshape, dtype) * sigma_init,
+            sigma=ones(wshape, dtype) * 0.5 * lim,
         )
         self.bias = GaussianParameter(
             mu=uniform(bkey, bshape, minval=-lim,
                        maxval=lim) if use_bias else None,
-            sigma=ones(bshape, dtype) * sigma_init if use_bias else None,
+            sigma=ones(bshape, dtype) * 0.5 *lim if use_bias else None,
         )
         self.in_features = in_features
         self.out_features = out_features
@@ -99,14 +97,14 @@ class BayesianLinear(Module, strict=True):
 class SmallBayesianNetwork(Module):
     layers: list[BayesianLinear]
 
-    def __init__(self, key, sigma_init):
+    def __init__(self, key):
         key1, key2 = split(key)
         self.layers = [ravel,
                        BayesianLinear(
-                           784, 50, use_bias=False, key=key1, sigma_init=sigma_init),
+                           784, 50, use_bias=False, key=key1),
                        relu,
                        BayesianLinear(
-                           50, 10, use_bias=False, key=key2, sigma_init=sigma_init)]
+                           50, 10, use_bias=False, key=key2)]
 
     def __call__(self, x, samples, key):
         key = split(key, len(self.layers))

@@ -13,7 +13,6 @@ import traceback
 from utils import *
 import argparse
 import json
-
 # argparse allows to load a configuration from a file
 CONFIGURATION_LOADING_FOLDER = "configurations"
 # first argument is name of config file
@@ -83,7 +82,7 @@ if __name__ == "__main__":
                 configuration, eqx.filter(model, eqx.is_array))
             train_samples = configuration["n_train_samples"] if "n_train_samples" in configuration else None
             test_samples = configuration["n_test_samples"] if "n_test_samples" in configuration else None
-            if EXTRA == True:
+            if EXTRA:
                 ood_key, rng = jax.random.split(rng)
                 ood_test_images, ood_test_labels = prepare_data(
                     test.data, test.targets, configuration["test_batch_size"], num_classes)
@@ -102,6 +101,9 @@ if __name__ == "__main__":
                 pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
             else:
                 pbar = range(configuration["n_tasks"])
+                
+            # Check memory usage at this point
+            jax.profiler.save_device_memory_profile("memory.prof")
             for i, task in enumerate(pbar):
                 for epoch in range(configuration["epochs"]):
                     train_ck = training_core_keys[task, epoch]
@@ -160,7 +162,7 @@ if __name__ == "__main__":
                         for i, acc in enumerate(accuracies):
                             tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
                                        9 and i != len(accuracies) - 1 else "\n")
-                    if EXTRA == True:
+                    if EXTRA:
                         # Save weights histogram
                         histogramWeights(eqx.filter(
                             model, eqx.is_array), WEIGHTS_PATH, task, epoch)

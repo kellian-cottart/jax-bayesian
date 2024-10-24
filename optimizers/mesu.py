@@ -12,6 +12,7 @@ def discriminant(param):
 def mesu(
         lr_mu: float = 1,
         lr_sigma: float = 1,
+        sigma_prior: float = 0.2,
         mu_prior: float = 0,
         N_mu: int = 1e5,
         N_sigma: int = 1e5,
@@ -34,7 +35,7 @@ def mesu(
     def init(params):
         # Check if all parameters are bayesian i.e that the path name contains mu or sigma
         def prior_compute(param):
-            return GaussianParameter(jnp.ones_like(param.mu) * mu_prior, param.sigma)
+            return GaussianParameter(jnp.ones_like(param.mu) * mu_prior, jnp.ones_like(param.sigma) * sigma_prior)
         prior = jax.tree_util.tree_map(
             prior_compute, params, is_leaf=discriminant)
         return {

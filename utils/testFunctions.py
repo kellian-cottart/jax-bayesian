@@ -31,10 +31,9 @@ def permute_and_test(model, permutations, image_batch, label_batch, max_perm_par
     """ When having too many permutations, we can't vmap everything at once. This function splits the permutations
     into smaller chunks and computes the accuracy for each chunk of max_perm_parallel permutations at a time.
     """
-    # max perm should be the max operation to parallelize, hence the data must be split into max_perm_parallel chunks
-    batched_permutations = permutations.reshape(
-        max_perm_parallel, permutations.shape[0] // max_perm_parallel, *permutations.shape[1:]) if len(permutations) > max_perm_parallel else jnp.array([permutations])
-
+    batched_permutations = permutations.reshape(max_perm_parallel, permutations.shape[0] // max_perm_parallel,*permutations.shape[1:])
+    
+    
     def test_batch_permutation_fn(model, image_batch, label_batch, batched_permutations, samples=None, rng=None):
         def compute_perm_accuracy(carry, data):
             perm, rng = data
