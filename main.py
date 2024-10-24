@@ -164,9 +164,9 @@ if __name__ == "__main__":
                         permutations=ood_permutation,
                         test_samples=test_samples
                     )
+                    
                     aleatoric_uncertainty, epistemic_uncertainty, aleatoric_uncertainty_ood, epistemic_uncertainty_ood, auc = computeUncertainty(
-                        predictions=jnp.expand_dims(
-                            predictions[i], axis=0),
+                        predictions=predictions,
                         ood_predictions=ood_predictions
                     )
                     with open(os.path.join(UNCERTAINTY_PATH, f"aleatoric-task={task}-epoch={epoch}.npy"), "wb") as f:

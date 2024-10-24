@@ -8,11 +8,8 @@ def computeUncertainty(predictions, ood_predictions):
     # Predictions are given as direct outputs of the model (no softmax)
     # shape is (batch_size, )
     # Labels are one-hot encoded
-
     softmax_predictions = jax.nn.softmax(predictions, axis=-1)
     softmax_ood_predictions = jax.nn.softmax(ood_predictions, axis=-1)
-    # shapes 9984, 10 and 10, 9984, 5, 10
-
     def compute_full_uncertainty(predictions):
         """
         Compute the aleatoric and epistemic uncertainty for all classes.
@@ -52,6 +49,7 @@ def computeUncertainty(predictions, ood_predictions):
         aleatoric_uncertainty = total_uncertainty - \
             epistemic_uncertainty
         return aleatoric_uncertainty, epistemic_uncertainty
+    
     # Compute the aleatoric and epistemic uncertainty for each class
     aleatoric_uncertainty, epistemic_uncertainty = jax.vmap(compute_full_uncertainty)(
         softmax_predictions)

@@ -79,12 +79,13 @@ def test_fn(model: eqx.Module,
         _, (accuracies, predictions) = jax.lax.scan(
             ft.partial(scan_fn, permutations=permutations), init=(), xs=(images, labels, rng))
         accuracies = accuracies.mean(axis=0)
+        predictions = predictions.reshape(
+            predictions.shape[1], predictions.shape[0]*predictions.shape[2], *predictions.shape[3:])
     else:
         accuracies, predictions = jax.vmap(compute_accuracy, in_axes=(
             None, 0, 0, None, None))(model, images, labels, test_samples, rng)
-
         accuracies = jnp.expand_dims(accuracies.mean(), 0)
+        predictions = predictions.reshape(
+            predictions.shape[0]*predictions.shape[1], *predictions.shape[2:])
         predictions = jnp.expand_dims(predictions, 0)
-    predictions = predictions.reshape(
-        predictions.shape[1], predictions.shape[0]*predictions.shape[2], *predictions.shape[3:])
     return accuracies, predictions
