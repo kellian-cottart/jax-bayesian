@@ -22,14 +22,11 @@ parser.add_argument("--config", help="Configuration file name",
 parser.add_argument(
     "--n_iterations", help="Number of iterations to run the config file for", type=int, default=1)
 parser.add_argument(
-    "--extra", help="Whether to run the extra part of the code(graphs, uncertainty)", action="store_true")
-parser.add_argument(
     "-v", "--verbose", help="Whether to display the pbar or not", action="store_true")
 args = parser.parse_args()
 CONFIG_FILE = json.load(
     open(os.path.join(CONFIGURATION_LOADING_FOLDER, args.config)))
 N_ITERATIONS = args.n_iterations
-EXTRA = args.extra
 VERBOSE = args.verbose
 
 if __name__ == "__main__":
@@ -82,12 +79,11 @@ if __name__ == "__main__":
                 configuration, eqx.filter(model, eqx.is_array))
             train_samples = configuration["n_train_samples"] if "n_train_samples" in configuration else None
             test_samples = configuration["n_test_samples"] if "n_test_samples" in configuration else None
-            if EXTRA:
-                ood_key, rng = jax.random.split(rng)
-                ood_test_images, ood_test_labels = prepare_data(
-                    test.data, test.targets, configuration["test_batch_size"], num_classes)
-                ood_permutation = jnp.array([jax.random.permutation(
-                    ood_key, jnp.array(shape).prod())])
+            ood_key, rng = jax.random.split(rng)
+            ood_test_images, ood_test_labels = prepare_data(
+                test.data, test.targets, configuration["test_batch_size"], num_classes)
+            ood_permutation = jnp.array([jax.random.permutation(
+                ood_key, jnp.array(shape).prod())])
 
             # GENERATING A HUGE ARRAY OF KEYS, ASSURING THAT THE KEYS ARE UNIQUE
             trkey, tekey, ookey, rng = jax.random.split(rng, 4)
@@ -101,16 +97,13 @@ if __name__ == "__main__":
                 pbar = tqdm(range(configuration["n_tasks"]), desc="Tasks")
             else:
                 pbar = range(configuration["n_tasks"])
-                
-            # Check memory usage at this point
-            jax.profiler.save_device_memory_profile("memory.prof")
             for i, task in enumerate(pbar):
                 for epoch in range(configuration["epochs"]):
-                    train_ck = training_core_keys[task, epoch]
-                    test_ck = testing_core_keys[task, epoch]
                     if VERBOSE:
                         pbar.set_description(
                             f"Task {task+1}/{configuration['n_tasks']} - Epoch {epoch+1}/{configuration['epochs']}")
+                    train_ck = training_core_keys[task, epoch]
+                    test_ck = testing_core_keys[task, epoch]
                     special_perm = permutations[task] if permutations is not None else None
                     # Split the model into dynamic and static parts
                     dynamic_init_state, static_state = eqx.partition(
@@ -157,43 +150,37 @@ if __name__ == "__main__":
                         permutations=permutations,
                         test_samples=test_samples
                     )
-                    if VERBOSE:
-                        tqdm.write("=" * 20)
-                        for i, acc in enumerate(accuracies):
-                            tqdm.write(f"{acc.item()*100:.2f}%", end="\t" if i % 10 !=
-                                       9 and i != len(accuracies) - 1 else "\n")
-                    if EXTRA:
-                        # Save weights histogram
-                        histogramWeights(eqx.filter(
-                            model, eqx.is_array), WEIGHTS_PATH, task, epoch)
-                        # Compute uncertainty
-                        ood_k = ood_core_keys[task, epoch]
-                        ood_accuracies, ood_predictions = test_fn(
-                            model=model,
-                            images=ood_test_images,
-                            labels=ood_test_labels,
-                            rng=ood_k,
-                            max_perm_parallel=configuration["max_perm_parallel"],
-                            permutations=ood_permutation,
-                            test_samples=test_samples
-                        )
-                        aleatoric_uncertainty, epistemic_uncertainty, aleatoric_uncertainty_ood, epistemic_uncertainty_ood, auc = computeUncertainty(
-                            predictions=jnp.expand_dims(
-                                predictions[i], axis=0),
-                            ood_predictions=ood_predictions
-                        )
-                        with open(os.path.join(UNCERTAINTY_PATH, f"aleatoric-task={task}-epoch={epoch}.npy"), "wb") as f:
-                            jnp.save(f, aleatoric_uncertainty)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-aleatoric-task={task}-epoch={epoch}.npy"), "wb") as f:
-                            jnp.save(f, aleatoric_uncertainty_ood)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"epistemic-task={task}-epoch={epoch}.npy"), "wb") as f:
-                            jnp.save(f, epistemic_uncertainty)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"ood-epistemic-task={task}-epoch={epoch}.npy"), "wb") as f:
-                            jnp.save(f, epistemic_uncertainty_ood)
-                        with open(os.path.join(UNCERTAINTY_PATH, f"roc-auc-task={task}-epoch={epoch}.npy"), "wb") as f:
-                            jnp.save(f, auc)
-                        with open(os.path.join(DATA_PATH, f"task={task}-epoch={epoch}.npy"), "wb") as f:
-                            jnp.save(f, accuracies)
+                    # Save weights histogram
+                    histogramWeights(eqx.filter(
+                        model, eqx.is_array), WEIGHTS_PATH, task, epoch)
+                    # Compute uncertainty
+                    ood_k = ood_core_keys[task, epoch]
+                    ood_accuracies, ood_predictions = test_fn(
+                        model=model,
+                        images=ood_test_images,
+                        labels=ood_test_labels,
+                        rng=ood_k,
+                        max_perm_parallel=configuration["max_perm_parallel"],
+                        permutations=ood_permutation,
+                        test_samples=test_samples
+                    )
+                    aleatoric_uncertainty, epistemic_uncertainty, aleatoric_uncertainty_ood, epistemic_uncertainty_ood, auc = computeUncertainty(
+                        predictions=jnp.expand_dims(
+                            predictions[i], axis=0),
+                        ood_predictions=ood_predictions
+                    )
+                    with open(os.path.join(UNCERTAINTY_PATH, f"aleatoric-task={task}-epoch={epoch}.npy"), "wb") as f:
+                        jnp.save(f, aleatoric_uncertainty)
+                    with open(os.path.join(UNCERTAINTY_PATH, f"ood-aleatoric-task={task}-epoch={epoch}.npy"), "wb") as f:
+                        jnp.save(f, aleatoric_uncertainty_ood)
+                    with open(os.path.join(UNCERTAINTY_PATH, f"epistemic-task={task}-epoch={epoch}.npy"), "wb") as f:
+                        jnp.save(f, epistemic_uncertainty)
+                    with open(os.path.join(UNCERTAINTY_PATH, f"ood-epistemic-task={task}-epoch={epoch}.npy"), "wb") as f:
+                        jnp.save(f, epistemic_uncertainty_ood)
+                    with open(os.path.join(UNCERTAINTY_PATH, f"roc-auc-task={task}-epoch={epoch}.npy"), "wb") as f:
+                        jnp.save(f, auc)
+                    with open(os.path.join(DATA_PATH, f"task={task}-epoch={epoch}.npy"), "wb") as f:
+                        jnp.save(f, accuracies)
         except (KeyboardInterrupt, SystemExit, Exception):
             print(traceback.format_exc())
             rmtree(SAVE_PATH)

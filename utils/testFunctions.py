@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import equinox as eqx
+import functools as ft
 
 
 @eqx.filter_jit
@@ -31,9 +32,12 @@ def permute_and_test(model, permutations, image_batch, label_batch, max_perm_par
     """ When having too many permutations, we can't vmap everything at once. This function splits the permutations
     into smaller chunks and computes the accuracy for each chunk of max_perm_parallel permutations at a time.
     """
-    batched_permutations = permutations.reshape(max_perm_parallel, permutations.shape[0] // max_perm_parallel,*permutations.shape[1:])
-    
-    
+    if not max_perm_parallel > permutations.shape[0]:
+        batched_permutations = permutations.reshape(
+            max_perm_parallel, permutations.shape[0] // max_perm_parallel, *permutations.shape[1:])
+    else:
+        batched_permutations = jnp.expand_dims(permutations, 0)
+
     def test_batch_permutation_fn(model, image_batch, label_batch, batched_permutations, samples=None, rng=None):
         def compute_perm_accuracy(carry, data):
             perm, rng = data
@@ -66,12 +70,19 @@ def test_fn(model: eqx.Module,
             test_samples=None):
     if permutations is not None:
         rng = jax.random.split(rng, images.shape[0])
-        accuracies, predictions = jax.vmap(permute_and_test, in_axes=(None, None, 0, 0, None, None, 0))(
-            model, permutations, images, labels, max_perm_parallel, test_samples, rng)
+
+        def scan_fn(carry, data, permutations):
+            img, lbl, rng = data
+            accuracies, predictions = permute_and_test(
+                model, permutations, img, lbl, max_perm_parallel, test_samples, rng)
+            return carry, (accuracies, predictions)
+        _, (accuracies, predictions) = jax.lax.scan(
+            ft.partial(scan_fn, permutations=permutations), init=(), xs=(images, labels, rng))
         accuracies = accuracies.mean(axis=0)
     else:
         accuracies, predictions = jax.vmap(compute_accuracy, in_axes=(
             None, 0, 0, None, None))(model, images, labels, test_samples, rng)
+
         accuracies = jnp.expand_dims(accuracies.mean(), 0)
         predictions = jnp.expand_dims(predictions, 0)
     predictions = predictions.reshape(

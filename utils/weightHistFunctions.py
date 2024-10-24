@@ -1,7 +1,6 @@
-import matplotlib.pyplot as plt
-from models import *
-from jax import jit
 import jax.numpy as jnp
+import equinox as eqx
+from models import GaussianParameter
 
 
 def histogramWeights(model, path, task, epoch):
@@ -13,6 +12,8 @@ def histogramWeights(model, path, task, epoch):
         task: The task identifier for naming.
         epoch: The epoch number for naming.
     """
+
+    @eqx.filter_jit
     def collect_weights(model):
         weights = []
         # Collect weights and biases from the model
@@ -32,68 +33,41 @@ def histogramWeights(model, path, task, epoch):
                     weights.append(layer.bias)
         return weights
 
-    # JIT compile the collect_weights function
-    collect_weights_jit = jit(collect_weights)
-    weights = collect_weights_jit(model)
-
-    # Create subplots for each weight array
-    fig, axes = plt.subplots(len(weights), 1, figsize=(5, 5*len(weights)))
-    for i, weight in enumerate(weights):
+    @eqx.filter_jit
+    def process_weight(weight):
         flattened = weight.flatten()
         max_abs_value = jnp.max(jnp.abs(flattened))
-        # Calculate histogram counts and bin edges
-        counts, bin_edges = jnp.histogram(
-            flattened, bins=100, range=(-max_abs_value, max_abs_value))
-        # Convert counts to percentages
-        percentages = counts / jnp.sum(counts) * 100
-        # Plotting
-        axes[i].bar(bin_edges[:-1], percentages, width=bin_edges[1] -
-                    bin_edges[0], align='edge', edgecolor='black')
-        axes[i].set_title(
-            f'Layer {shape(weight)}, Mean: {jnp.mean(jnp.abs(flattened)):.2f}, Std: {jnp.std(jnp.abs(flattened)):.2f}')
-        axes[i].set_xlabel('Weights [-]')
-        axes[i].set_ylabel('Percentage of Weights [%]')
-        # Center the x-axis around 0 based on the maximum absolute value
-        axes[i].set_xlim(-max_abs_value, max_abs_value)
-        # Set ylim
-        axes[i].set_ylim(0, 50)
-        # save the counts
-        name = None
-        if "Bayesian" in model.__class__.__name__:
-            layer = i // 2
-            if i % 2 == 0:
-                name = f"{path}/counts-sigma-l={layer}-task={task}-epoch={epoch}.npy"
-            else:
-                name = f"{path}/counts-mu-l={layer}-task={task}-epoch={epoch}.npy"
-        else:
-            layer = i
-            name = f"{path}/counts-l={layer}-task={task}-epoch = {epoch}.npy"
 
-        with open(name, 'wb') as f:
-            jnp.save(f, counts)
-
-    # Save the mean and the std of the weights for each layer
-    for i, weight in enumerate(weights):
-        flattened = weight.flatten()
         mean = jnp.mean(jnp.abs(flattened))
         std = jnp.std(jnp.abs(flattened))
         save = jnp.array([mean, std])
-        name = None
-        if "Bayesian" in model.__class__.__name__:
-            layer = i // 2
-            if i % 2 == 0:
-                name = f"{path}/param-sigma-l={layer}-task={task}-epoch={epoch}.npy"
-            else:
-                name = f"{path}/param-mu-l={layer}-task={task}-epoch={epoch}.npy"
-        else:
-            layer = i
-            name = f"{path}/param-l={layer}-task={task}-epoch = {epoch}.npy"
 
-        with open(name, 'wb') as f:
-            jnp.save(f, save)
+        # Calculate histogram counts and bin edges
+        counts, bin_edges = jnp.histogram(
+            flattened, bins=100, range=(-max_abs_value, max_abs_value))
+        return counts, save
 
-    # Adjust layout and save the figure
-    plt.tight_layout()
-    fig.savefig(f"{path}/weights-task={task}-epoch={epoch}.pdf",
-                format='pdf')
-    plt.close(fig)
+    # Collect and process weights
+    weights = collect_weights(model)
+    # Initialize lists to store all counts and parameters
+    all_counts = []
+    all_params = []
+
+    # Iterate over weights and process them
+    for weight in weights:
+        counts, save = process_weight(weight)
+        all_counts.append(counts)
+        all_params.append(save)
+
+    # Convert lists to arrays
+    all_counts = jnp.array(all_counts)
+    all_params = jnp.array(all_params)
+
+    # Save all counts and parameters in single files
+    counts_name = f"{path}/counts-task={task}-epoch={epoch}.npy"
+    params_name = f"{path}/params-task={task}-epoch={epoch}.npy"
+
+    with open(counts_name, 'wb') as f:
+        jnp.save(f, all_counts)
+    with open(params_name, 'wb') as f:
+        jnp.save(f, all_params)

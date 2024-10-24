@@ -14,10 +14,10 @@
   "task": "PermutedMNIST",
   "n_train_samples": 10,
   "n_test_samples": 10,
-  "n_tasks": 10,
+  "n_tasks": 200,
   "epochs": 1,
   "train_batch_size": 1,
-  "test_batch_size": 128,
-  "max_perm_parallel": 1,
+  "test_batch_size": 256,
+  "max_perm_parallel": 40,
   "seed": 1000
 }
